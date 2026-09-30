@@ -183,5 +183,28 @@ def apply_move_effects(state: dict, actor_side: str, move_id: str) -> bool:
     return handled
 
 
+def apply_entry_hazards(mon: dict, hazards: dict):
+    """Charge a just-switched-in mon its entry hazards (mutates in place):
+    stealth rock (type-aware, up to 1/2 vs 4x weak), spikes per layer
+    (grounded only), toxic spikes (status), sticky web (-1 spe)."""
+    if not mon or mon["hp"] <= 0:
+        return
+    hp_loss = 0.0
+    if hazards.get("stealthrock"):
+        hp_loss += effectiveness("Rock", mon) / 8
+    if hazards.get("spikes"):
+        grounded = "Flying" not in defender_types(mon) \
+            and mon.get("ability") != "levitate"
+        if grounded:
+            hp_loss += min(3, hazards["spikes"]) / 8
+    if hp_loss:
+        mon["hp"] = max(0.0, mon["hp"] - hp_loss)
+    if hazards.get("toxicspikes") and not mon.get("status"):
+        if not ({"Poison", "Steel"} & set(defender_types(mon))):
+            mon["status"] = "tox" if hazards["toxicspikes"] >= 2 else "psn"
+    if hazards.get("stickyweb"):
+        apply_boosts(mon, {"spe": -1})
+
+
 def clone(state: dict) -> dict:
     return copy.deepcopy(state)

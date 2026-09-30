@@ -92,6 +92,7 @@ class VsAgent(Player):
         me, foe = s2["my"]["active"], s2["foe"]["active"]
         if tera_type and me:
             me["tera"] = tera_type
+        d = 0.0
         if entry.get("category") != "status":
             d = T.damage(me, foe, move_id, s2)
             foe["hp"] = max(0.0, foe["hp"] - d)
@@ -102,14 +103,29 @@ class VsAgent(Player):
                 me["hp"] = max(0.0, me["hp"] - 0.15)
             if entry.get("drain") and me:
                 me["hp"] = min(1.0, me["hp"] + d * entry["drain"][0] / entry["drain"][1])
+        ko = bool(foe) and foe["hp"] == 0
         modelled = T.apply_move_effects(s2, "my", move_id)
         self._retaliate(s2, state)
         base = self._v(s2)
-        return base if modelled else base - 0.02
+        if not modelled:
+            base -= 0.02
+        # endgame urgency: on our last mon, a non-damaging turn we don't
+        # survive is a wasted turn — V's coarse features can't price it
+        died = not me or me["hp"] == 0
+        if state["my"]["remaining"] <= 1 and died and d == 0 and not ko:
+            base -= 0.06
+        return base
 
     def _ev_switch(self, state: dict, bench_mon) -> float:
         s2 = T.clone(state)
-        s2["my"]["active"] = _mon_public(bench_mon)
+        incoming = _mon_public(bench_mon)
+        T.apply_entry_hazards(incoming, s2["my"].get("hazards", {}))
+        if incoming["hp"] == 0:  # hazard death on entry (rocks vs a chipped mon)
+            s2["my"]["fainted"] = min(6, s2["my"]["fainted"] + 1)
+            s2["my"]["remaining"] = max(0, s2["my"]["remaining"] - 1)
+            s2["my"]["active"] = incoming
+            return self._v(s2)
+        s2["my"]["active"] = incoming
         self._retaliate(s2, state)
         return self._v(s2)
 
