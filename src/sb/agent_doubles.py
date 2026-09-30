@@ -137,9 +137,10 @@ class VsAgentDoubles(Player):
         return handled
 
     def _ev_move_d(self, state: dict, slot_i: int, move_id: str,
-                   foes_alive: list[int]) -> tuple[float, int | None]:
-        """EV of slot-i mon using move_id. Returns (ev, target_idx) where
-        target_idx is the foe active slot to aim at (None = no target)."""
+                   foes_alive: list[int]) -> tuple:
+        """EV of slot-i mon using move_id. Returns (ev, target_idx, dmg, ko, died)
+        where dmg is total HP dealt, ko = a foe dropped, died = the acting mon
+        faints to the expected retaliation."""
         s2 = T.clone(state)
         me = s2["my"]["active"][slot_i]
         foes = s2["foe"]["active"]
@@ -152,8 +153,9 @@ class VsAgentDoubles(Player):
                 # spread: 0.75x to each foe active; ally damage not modelled (v1)
                 for fi in foes_alive:
                     foe = foes[fi]
-                    d = T.damage(me, foe, move_id, s2) * 0.75
-                    foe["hp"] = max(0.0, foe["hp"] - d)
+                    d_spread = T.damage(me, foe, move_id, s2) * 0.75
+                    d += d_spread
+                    foe["hp"] = max(0.0, foe["hp"] - d_spread)
                     self._faint_foe(s2, foe)
                 target_idx, target = None, None
             elif target is not None:
@@ -168,10 +170,17 @@ class VsAgentDoubles(Player):
                 me["hp"] = max(0.0, me["hp"] - 0.15)
             if entry.get("drain") and me:
                 me["hp"] = min(1.0, me["hp"] + d * entry["drain"][0] / entry["drain"][1])
+        ko = any(f and f["hp"] == 0 for f in foes)
         modelled = self._apply_effects_d(s2, slot_i, move_id, target)
         self._retaliate_d(s2, slot_i)
+        died = not me or me["hp"] == 0
         base = self._v(s2, me["pos"] if me else None)
-        return (base if modelled else base - 0.02), target_idx
+        ev = base if modelled else base - 0.02
+        # endgame urgency: on our last mon, a setup turn we don't survive is a
+        # wasted turn — V's coarse features can't see it, so correct directly
+        if state["my"]["remaining"] <= 1 and died and d == 0 and not ko:
+            ev -= 0.06
+        return ev, target_idx, d, ko, died
 
     def _ev_switch_d(self, state: dict, slot_i: int, bench_mon: dict,
                      slot_pos: str) -> float:
@@ -219,11 +228,12 @@ class VsAgentDoubles(Player):
                 else:
                     return Player.choose_random_doubles_move(battle)
                 continue
-            opts, err = [], None
+            opts, err, dmg_by_name = [], None, {}
             for _, name, kind, payload in cands:
                 try:
                     if kind == "move":
-                        ev, t_idx = self._ev_move_d(state, i, payload.id, foes_alive)
+                        ev, t_idx, d, _, _ = self._ev_move_d(state, i, payload.id, foes_alive)
+                        dmg_by_name[name] = d
                         order = self.create_order(
                             payload,
                             move_target=(battle.to_showdown_target(payload, None)
@@ -243,7 +253,9 @@ class VsAgentDoubles(Player):
                 slot_orders.append(PassBattleOrder())
                 slot_log.append({"chosen": "pass", "all_candidates_error": err})
                 continue
-            opts.sort(key=lambda x: x[1], reverse=True)
+            # near-ties break toward immediate damage — V's coarse features
+            # can't value tempo, so when EVs agree, act
+            opts.sort(key=lambda x: (x[1], dmg_by_name.get(x[0], 0.0)), reverse=True)
             slot_opts.append(opts)
             slot_orders.append(opts[0][2])
             entry = {"chosen": opts[0][0],
