@@ -150,6 +150,9 @@ class Battle:
         nick = pos.split(": ", 1)[1] if ": " in pos else pos
         species = to_id(details.split(",")[0])
         mon = side.mon(nick)
+        if mon.fainted:  # revived (Revival Blessing) — no longer fainted
+            mon.fainted = False
+            side.fainted = max(0, side.fainted - 1)
         if side.active and side.active in side.mons:
             side.mons[side.active].reset_on_switch()
         side.active = nick
@@ -321,7 +324,7 @@ HANDLERS = {
     "-sidestart": "h_sidestart", "-sideend": "h_sideend",
     "-ability": "h_ability", "-item": "h_item", "-enditem": "h_enditem",
     "-terastallize": "h_terastallize", "-mega": "h_detailschange",
-    "-primal": "h_detailschange", "-faint": "h_faint",
+    "-primal": "h_detailschange", "faint": "h_faint",
     "detailschange": "h_detailschange", "win": "h_win", "tie": "h_tie",
 }
 
