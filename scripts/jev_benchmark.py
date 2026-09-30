@@ -117,7 +117,8 @@ def main():
             if args.min_turn <= r["turn"] <= args.max_turn:
                 rows.append(r)
     # balanced sample: interleave wins/losses, fixed seed
-    rows.sort(key=lambda r: (r["outcome"], hash(r["game"]) & 0xFFFF))
+    import hashlib as _hl
+    rows.sort(key=lambda r: (r["outcome"], int(_hl.md5(r["game"].encode()).hexdigest(), 16) & 0xFFFF))
     wins = [r for r in rows if r["outcome"] == 1.0]
     losses = [r for r in rows if r["outcome"] == 0.0]
     n = args.limit if not args.smoke else 6
