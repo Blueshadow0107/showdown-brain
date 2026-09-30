@@ -65,8 +65,8 @@ async def main():
                                   start_timer_on_battle_start=True)
     print("both players up — challenging", flush=True)
     await asyncio.gather(
-        base.send_challenges("kingambit", 1),
-        king.accept_challenges("poryclone", 1),
+        base.send_challenges(king.username, 1),
+        king.accept_challenges(base.username, 1),
     )
     for tag, b in king.battles.items():
         result = "WIN" if b.won else "LOSS" if b.lost else "TIE"
