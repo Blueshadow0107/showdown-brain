@@ -4,8 +4,9 @@ Mirror of VsAgent for DoubleBattle: per active slot, EV(action) = V(state after
 my action + both foe actives' expected damaging response), leaves scored by the
 doubles V model (features_doubles). Differences from singles, by design (v1):
 
-- Opponent model is uniform over each foe active's damaging move pool (from
-  randdoubles-sets.json); no pi2 weighting (pi2 is singles-dim).
+- Opponent model: pi2d (doubles policy prior) weights over each foe slot's
+  damaging move pool, scaled by P(move | foe-perspective state) — so protect-
+  heavy or switch-happy foe states naturally discount the expected hit.
 - Spread moves (target allAdjacent/allAdjacentFoes) deal 0.75x damage to EACH
   foe active; allAdjacent's ally damage is NOT modelled (simplification).
 - Retaliation sums expected damage from BOTH foe actives onto the acting slot.
@@ -22,7 +23,7 @@ from poke_env.battle import DoubleBattle
 from poke_env.player import Player
 from poke_env.player.battle_order import DoubleBattleOrder, PassBattleOrder
 
-from sb import features, features_doubles as FD, transitions as T
+from sb import features, features_doubles as FD, pi2doubles, transitions as T
 from sb.features import to_id
 from sb.showdown_state_doubles import battle_to_state_d, _mon_public_d
 
@@ -46,7 +47,12 @@ class VsAgentDoubles(Player):
         features._load()
         T.load()
         self.v = lgb.Booster(model_file=str(ROOT / "models" / "v_model_doubles.txt"))
-        self._pools = {}     # per-decision cache: foe pos -> damaging move pool
+        try:
+            self.pi2d = pi2doubles.load()
+        except FileNotFoundError:
+            self.pi2d = None  # retaliation falls back to uniform pool weights
+        self._pools = {}        # per-decision cache: foe pos -> damaging move pool
+        self._foe_pi_cache = {}  # per-decision cache: foe pos -> (weights, p_move)
         self.log_path = log_path
         self._log = open(log_path, "a") if log_path else None
 
@@ -77,8 +83,34 @@ class VsAgentDoubles(Player):
         self._pools[key] = pool
         return pool
 
-    def _retaliate_d(self, s2: dict, slot_i: int):
-        """Expected damage on my slot-i mon from EACH living foe active."""
+    def _foe_pi(self, foe: dict, state: dict, pool: list):
+        """pi2d-weighted response for one foe slot, cached per decision.
+
+        Returns (weights {move: p}, p_move). p_move < 1 means the prior expects
+        a switch (or another non-move order) from that slot often enough to
+        matter. Falls back to uniform when the bundle is missing.
+        """
+        key = foe.get("pos")
+        if key in self._foe_pi_cache:
+            return self._foe_pi_cache[key]
+        if self.pi2d is None:
+            ctx = ({m: 1.0 / len(pool) for m in pool}, 1.0)
+        else:
+            flip = {**state, "my": state["foe"], "foe": state["my"]}
+            slot = foe.get("pos")
+            probs = pi2doubles.action_probs(self.pi2d, flip, slot,
+                                            ["move:" + m for m in pool])
+            w = {m: probs.get("move:" + m, 1e-6) for m in pool}
+            tot = sum(w.values()) or 1.0
+            x = np.array([FD.state_features_d(flip, slot)], dtype="float32")
+            p_move = float(self.pi2d["kind"].predict(x)[0])
+            ctx = ({m: p / tot for m, p in w.items()}, p_move)
+        self._foe_pi_cache[key] = ctx
+        return ctx
+
+    def _retaliate_d(self, s2: dict, slot_i: int, state: dict):
+        """Expected damage on my slot-i mon from each living foe active,
+        weighted by the pi2d response prior (protect-heavy states discount)."""
         me = s2["my"]["active"][slot_i]
         if not me or me["hp"] <= 0:
             return
@@ -87,7 +119,9 @@ class VsAgentDoubles(Player):
             if not foe or foe["hp"] <= 0:
                 continue
             pool = self._foe_pool(foe)
-            exp_total += sum(T.damage(foe, me, om, s2) for om in pool) / len(pool)
+            weights, p_move = self._foe_pi(foe, state, pool)
+            exp_total += p_move * sum(w * T.damage(foe, me, om, s2)
+                                      for om, w in weights.items())
         me["hp"] = max(0.0, me["hp"] - exp_total)
         if me["hp"] == 0:
             s2["my"]["fainted"] = min(6, s2["my"]["fainted"] + 1)
@@ -180,7 +214,7 @@ class VsAgentDoubles(Player):
                 me["hp"] = min(1.0, me["hp"] + d * entry["drain"][0] / entry["drain"][1])
         ko = any(f and f["hp"] == 0 for f in foes)
         modelled = self._apply_effects_d(s2, slot_i, move_id, target)
-        self._retaliate_d(s2, slot_i)
+        self._retaliate_d(s2, slot_i, state)
         died = not me or me["hp"] == 0
         base = self._v(s2, me["pos"] if me else None)
         ev = base if modelled else base - 0.02
@@ -194,7 +228,7 @@ class VsAgentDoubles(Player):
                      slot_pos: str) -> float:
         s2 = T.clone(state)
         s2["my"]["active"][slot_i] = copy.deepcopy(bench_mon)
-        self._retaliate_d(s2, slot_i)
+        self._retaliate_d(s2, slot_i, state)
         return self._v(s2, slot_pos)
 
     def choose_move(self, battle):
@@ -202,6 +236,7 @@ class VsAgentDoubles(Player):
             return self.choose_random_move(battle)
         state = battle_to_state_d(battle)
         self._pools = {}
+        self._foe_pi_cache = {}
         slot_orders = []
         slot_log = []
         slot_opts = []
