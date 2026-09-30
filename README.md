@@ -15,16 +15,42 @@ Every turn, for every legal action it can take:
 EV(action) = V(state after my action + opponent's most likely response)
 ```
 
-- **V(s)** — LightGBM win predictor over a perspective-symmetric feature vector
-  (species, stats, HP, boosts, status, item/ability semantic tags, hazards,
-  weather, terrain, tera, …) trained on ~200k decision points from ladder replays.
+- **V(s)** — LightGBM win predictor (AUC 0.716) over a perspective-symmetric
+  feature vector: species, stats, HP, boosts, status, item/ability semantic
+  tags, hazards, weather, terrain, tera — plus a **momentum block** (speed
+  control, both-side kill-clocks, priority presence, switch counters).
+  Trained on ~200k decision points from public ladder replays.
 - **Opponent model** — the opponent's response is scored with a gen-9 damage
-  formula (stats, boosts, STAB, type matrix, weather/terrain, accuracy) over the
-  moves their species could be running, weighted by the π prior.
-- **π(a|s)** — two-stage policy clone (move-vs-switch classifier + per-class
-  rankers) learned from what humans actually did in similar states.
-- **Terastallization** — evaluated as a first-class candidate whenever it's
-  available, with tera typing handled in both offense and defense.
+  formula (stats, boosts, STAB, type matrix, weather/terrain, accuracy,
+  effective speed) over the moves their species could be running, weighted by
+  the π prior — so protect-heavy or switch-happy foes discount naturally.
+- **π(a|s)** — two-stage policy clone: a move-vs-switch classifier (89% acc)
+  plus move/switch rankers (41% top-1 / 78% top-3 over 310 moves) learned
+  from what humans actually did in similar states.
+- **Terastallization** — a first-class candidate whenever it's available,
+  with tera typing handled in both offense and defense.
+- **Tempo heuristics** — the search layer prices what a 1-ply value function
+  can't: entry hazards on switch-in evals, a last-mon urgency penalty
+  (no more setup-and-die), a repetition tax that breaks recovery-stall loops
+  (roost ×10), and a switch-commit threshold so pivots must clear a real EV
+  margin instead of bleeding tempo.
+
+## Benchmarks
+
+| judge | MAE | corr. with outcome | notes |
+|---|---|---|---|
+| V(s) | 0.26 | 0.92 | on 40 held-out mid-game states |
+| Jev (TypeSafe System One) | 0.48 | 0.23 | semantic judge, same states |
+
+The Jev comparison (`scripts/jev_benchmark.py`) was the fun experiment: a
+calibrated decision model with full semantic knowledge of Pokémon *loses* to
+the replay-learned V(s) at battle-state judgment — mostly because it ignores
+fainted actives and compresses toward 0.5. Its edge shows only where V lacks
+move-level knowledge. Scaffold included, API costs ~1¢ per 40 states.
+
+Playing strength: ~50% win rate vs poke-env's SimpleHeuristics baseline in
+random singles (10-game batches, zero decision errors). Doubles pipeline is
+complete but younger — same architecture, less mature.
 
 ## Quickstart (play against the pretrained bot, ~10 min)
 
