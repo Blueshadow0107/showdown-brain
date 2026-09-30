@@ -1,0 +1,12 @@
+# local data — harvest your own (see README)
+data/
+
+# python
+__pycache__/
+*.pyc
+.venv/
+
+# os/editor cruft
+.DS_Store
+.idea/
+.vscode/
