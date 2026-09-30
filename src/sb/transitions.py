@@ -7,7 +7,7 @@ caller's problem (agent falls back to prior/default).
 import copy
 import json
 
-from sb.features import DATA as _FDATA, resolve_species
+from sb.features import DATA as _FDATA, resolve_species, to_id
 
 DATA = _FDATA
 
@@ -27,6 +27,59 @@ def load():
 
 
 BOOSTS = ["atk", "def", "spa", "spd", "spe"]
+
+
+def effective_speed(mon: dict, state: dict) -> float:
+    """Speed for ordering comparisons. Trick Room inverts (returned as a
+    negative so 'higher = acts first' still holds). Paralysis halves."""
+    if not mon:
+        return 0.0
+    sp = estimate_stats(resolve_species(mon.get("species", "")),
+                        mon.get("level", 80))["spe"]
+    sp *= boost_mult(mon.get("boosts", {}).get("spe", 0))
+    if mon.get("status") == "par":
+        sp *= 0.5
+    return -sp if state.get("trick_room") else sp
+
+
+def damaging_moves(mon: dict, pool_from_sets: bool = True) -> list[str]:
+    """Known damaging moves, or the species' randbats movepool as a prior."""
+    moves = [m for m in mon.get("moves", [])
+             if MOVES.get(m, {}).get("power")
+             and MOVES.get(m, {}).get("category") != "status"]
+    if moves or not pool_from_sets:
+        return moves
+    entry = SETS.get(resolve_species(mon.get("species", "")))
+    if not entry:
+        return []
+    s = set()
+    for st in entry["sets"]:
+        s.update(to_id(m) for m in st["movepool"])
+    return [m for m in s
+            if MOVES.get(m, {}).get("power")
+            and MOVES.get(m, {}).get("category") != "status"]
+
+
+def kill_clock(attacker: dict, defender: dict, state: dict) -> int:
+    """Turns of best-move damage for `attacker` to KO `defender` (1, 2, or 3
+    meaning 'three or more' = not pressuring). The who-forces-who clock."""
+    if not attacker or not defender or defender["hp"] <= 0:
+        return 1
+    moves = damaging_moves(attacker)
+    if not moves:
+        return 3
+    best = max(damage(attacker, defender, m, state) for m in moves)
+    if best >= defender["hp"]:
+        return 1
+    if best * 2 >= defender["hp"]:
+        return 2
+    return 3
+
+
+def has_priority(mon: dict) -> bool:
+    """Does this mon run a damaging priority move (known or from its sets)?"""
+    return any((MOVES.get(m, {}).get("priority") or 0) > 0
+               for m in damaging_moves(mon))
 
 
 def boost_mult(stage: int) -> float:

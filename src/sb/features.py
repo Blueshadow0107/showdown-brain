@@ -154,10 +154,35 @@ def state_features(state: dict) -> list[float]:
     v += one_hot(TERRAINS.index(t), len(TERRAINS)) if t else [0.0] * len(TERRAINS)
     v += [1.0 if state["trick_room"] else 0.0]
     v += side_features(state["my"]) + side_features(state["foe"])
+    v += _momentum(state)
     return v
 
 
-DIM = len(WEATHERS) + len(TERRAINS) + 1 + 2 * (3 + 4 + 4 + MON_DIM)
+def _momentum(state: dict) -> list[float]:
+    """Tempo/pressure block: speed control, kill-clocks (who forces who),
+    priority presence, and switch counters (the cascade meter). Lazy import:
+    transitions imports features at module level."""
+    from sb import transitions as T
+    my, foe = state["my"]["active"], state["foe"]["active"]
+    v: list[float] = []
+    if my and foe and my["hp"] > 0 and foe["hp"] > 0:
+        ms, fs = T.effective_speed(my, state), T.effective_speed(foe, state)
+        v += one_hot(0 if ms > fs * 1.05 else (2 if fs > ms * 1.05 else 1), 3)
+        v += one_hot(T.kill_clock(my, foe, state) - 1, 3)
+        v += one_hot(T.kill_clock(foe, my, state) - 1, 3)
+        v += [1.0 if T.has_priority(my) else 0.0,
+              1.0 if T.has_priority(foe) else 0.0]
+    else:
+        v += [0.0] * 11
+    v += [min(state["my"].get("switches", 0), 6) / 6,
+          min(state["foe"].get("switches", 0), 6) / 6]
+    return v
+
+
+MOMENTUM_DIM = 13
+
+
+DIM = len(WEATHERS) + len(TERRAINS) + 1 + 2 * (3 + 4 + 4 + MON_DIM) + MOMENTUM_DIM
 
 
 def build_matrix(rows):

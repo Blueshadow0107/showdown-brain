@@ -67,6 +67,7 @@ class Side:
     active: str | None = None           # nickname of active mon
     mons: dict = field(default_factory=dict)  # nick -> Mon
     fainted: int = 0
+    switches: int = 0                   # voluntary switches (momentum feature)
     hazards: dict = field(default_factory=dict)   # cond -> count (spikes) or 1
     screens: dict = field(default_factory=dict)   # cond -> 1
 
@@ -112,6 +113,7 @@ class Battle:
             "fainted": s.fainted,
             "remaining": max(0, s.teamsize - s.fainted),
             "bench_known": len(bench),
+            "switches": s.switches,
             "hazards": dict(s.hazards),
             "screens": dict(s.screens),
         }
@@ -173,6 +175,7 @@ class Battle:
                 mon.maxhp = mx
             mon.hp = cur / mon.maxhp if mon.maxhp else 0.0
         if not forced and self.turn >= 1:
+            side.switches += 1
             self.emit(actor, "switch", species, pre=pre)
 
     def h_move(self, parts):

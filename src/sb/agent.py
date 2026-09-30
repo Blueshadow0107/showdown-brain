@@ -93,6 +93,18 @@ class VsAgent(Player):
         if tera_type and me:
             me["tera"] = tera_type
         d = 0.0
+        ko = False
+        prio = entry.get("priority") or 0
+        # ordering: a faster foe acts first — if it kills us, our move fizzles
+        foe_first = bool(foe and me) and foe["hp"] > 0 and prio <= 0 \
+            and T.effective_speed(foe, s2) > T.effective_speed(me, s2)
+        if foe_first:
+            self._retaliate(s2, state)
+            if not me or me["hp"] == 0:
+                base = self._v(s2)
+                if state["my"]["remaining"] <= 1:
+                    base -= 0.06
+                return base
         if entry.get("category") != "status":
             d = T.damage(me, foe, move_id, s2)
             foe["hp"] = max(0.0, foe["hp"] - d)
@@ -105,7 +117,8 @@ class VsAgent(Player):
                 me["hp"] = min(1.0, me["hp"] + d * entry["drain"][0] / entry["drain"][1])
         ko = bool(foe) and foe["hp"] == 0
         modelled = T.apply_move_effects(s2, "my", move_id)
-        self._retaliate(s2, state)
+        if not foe_first:
+            self._retaliate(s2, state)
         base = self._v(s2)
         if not modelled:
             base -= 0.02
@@ -130,7 +143,19 @@ class VsAgent(Player):
         return self._v(s2)
 
     def choose_move(self, battle):
-        state = battle_to_state(battle)
+        # momentum counters: reset per battle; my switches counted on choice,
+        # foe switches inferred from active-species changes between turns
+        if getattr(self, "_battle_tag", None) != battle.battle_tag:
+            self._battle_tag = battle.battle_tag
+            self._sw = {"my": 0, "foe": 0}
+            self._last_foe_active = None
+        foe_active = battle.opponent_active_pokemon
+        if foe_active is not None:
+            if (self._last_foe_active is not None
+                    and to_id(foe_active.species) != self._last_foe_active):
+                self._sw["foe"] += 1
+            self._last_foe_active = to_id(foe_active.species)
+        state = battle_to_state(battle, switch_counts=self._sw)
         self._ctx = None  # opponent-response cache lives for one decision
         options = []  # (name, ev, order)
         force = battle.force_switch or not battle.available_moves
@@ -185,6 +210,8 @@ class VsAgent(Player):
         if not options:
             return self.choose_random_move(battle)
         options.sort(key=lambda x: x[1], reverse=True)
+        if options[0][0].startswith("switch:"):
+            self._sw["my"] += 1
         if self._log:
             self._log.write(json.dumps({
                 "battle": battle.battle_tag, "turn": battle.turn,
