@@ -149,6 +149,8 @@ class VsAgent(Player):
             self._battle_tag = battle.battle_tag
             self._sw = {"my": 0, "foe": 0}
             self._last_foe_active = None
+            self._last_action = None
+            self._same_streak = 0
         foe_active = battle.opponent_active_pokemon
         if foe_active is not None:
             if (self._last_foe_active is not None
@@ -210,7 +212,25 @@ class VsAgent(Player):
         if not options:
             return self.choose_random_move(battle)
         options.sort(key=lambda x: x[1], reverse=True)
-        if options[0][0].startswith("switch:"):
+        # repetition tax: stalling with the same non-damaging move (roost loops)
+        # donates free turns; each consecutive repeat decays its EV so real
+        # progress overtakes. damaging repetition is fine — it makes progress.
+        if options[0][0].startswith("move:"):
+            move_id = options[0][0][5:].split("|")[0]
+            entry = T.MOVES.get(move_id, {})
+            if (move_id == self._last_action and not entry.get("power")
+                    and self._same_streak > 0):
+                taxed = [(n, e - 0.03 * (1 + self._same_streak) if n == options[0][0] else e, o)
+                         for n, e, o in options]
+                taxed.sort(key=lambda x: x[1], reverse=True)
+                options = taxed
+        chosen = options[0][0]
+        if chosen == self._last_action:
+            self._same_streak += 1
+        else:
+            self._same_streak = 0
+        self._last_action = chosen
+        if chosen.startswith("switch:"):
             self._sw["my"] += 1
         if self._log:
             self._log.write(json.dumps({
