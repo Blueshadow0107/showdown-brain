@@ -53,14 +53,21 @@ async def main():
     king = VsAgentDoubles(
         account_configuration=account,
         server_configuration=LOCAL,
+        battle_format="gen9randomdoublesbattle",
         log_path=str(ROOT / "data" / "human-games-doubles.log"),
     )
-    print("kingambit is online — waiting for a DOUBLES challenge (anyone, 1 game)", flush=True)
-    await king.accept_challenges(None, 1)
-    for tag, b in king.battles.items():
-        result = "WIN" if b.won else "LOSS" if b.lost else "TIE"
-        print(f"{tag}: {result} (turns: {b.turn})", flush=True)
-    await asyncio.sleep(2)
+    await king.ps_client.send_message("/join lobby")  # visible in the userlist
+    print("kingambit is online (lobby) — accepting DOUBLES challenges forever", flush=True)
+    seen = set()
+    while True:
+        await king.accept_challenges(None, 1)
+        for tag, b in king.battles.items():
+            if tag in seen:
+                continue
+            seen.add(tag)
+            result = "WIN" if b.won else "LOSS" if b.lost else "TIE"
+            print(f"{tag}: {result} (turns: {b.turn})", flush=True)
+        await asyncio.sleep(2)
 
 
 if __name__ == "__main__":

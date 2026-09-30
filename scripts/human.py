@@ -55,12 +55,18 @@ async def main():
         server_configuration=LOCAL,
         log_path=str(ROOT / "data" / "human-games.log"),
     )
-    print("kingambit is online — waiting for a challenge (anyone, 1 game)", flush=True)
-    await king.accept_challenges(None, 1)
-    for tag, b in king.battles.items():
-        result = "WIN" if b.won else "LOSS" if b.lost else "TIE"
-        print(f"{tag}: {result} (turns: {b.turn})", flush=True)
-    await asyncio.sleep(2)
+    await king.ps_client.send_message("/join lobby")  # visible in the userlist
+    print("kingambit is online (lobby) — accepting challenges forever, Ctrl-C to quit", flush=True)
+    seen = set()
+    while True:
+        await king.accept_challenges(None, 1)
+        for tag, b in king.battles.items():
+            if tag in seen:
+                continue
+            seen.add(tag)
+            result = "WIN" if b.won else "LOSS" if b.lost else "TIE"
+            print(f"{tag}: {result} (turns: {b.turn})", flush=True)
+        await asyncio.sleep(2)
 
 
 if __name__ == "__main__":
