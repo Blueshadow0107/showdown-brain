@@ -212,6 +212,16 @@ class VsAgent(Player):
         if not options:
             return self.choose_random_move(battle)
         options.sort(key=lambda x: x[1], reverse=True)
+        # switch-commit threshold: a voluntary pivot must CLEAR a margin over
+        # the best move. hair-margin switches donate a free entry hit and the
+        # tempo (battle-26 t9: golem in forced at t8, flipped out at +0.009).
+        if not force and options[0][0].startswith("switch:"):
+            best_move = max((e for n, e, _ in options if n.startswith("move:")),
+                            default=None)
+            if best_move is not None and options[0][1] - best_move < 0.025:
+                stay = [o for o in options if o[0].startswith("move:")] or options
+                stay.sort(key=lambda x: x[1], reverse=True)
+                options = stay
         # repetition tax: stalling with the same non-damaging move (roost loops)
         # donates free turns; each consecutive repeat decays its EV so real
         # progress overtakes. damaging repetition is fine — it makes progress.
