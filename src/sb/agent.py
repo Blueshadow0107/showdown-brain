@@ -225,12 +225,12 @@ class VsAgent(Player):
         # repetition tax: stalling with the same non-damaging move (roost loops)
         # donates free turns; each consecutive repeat decays its EV so real
         # progress overtakes. damaging repetition is fine — it makes progress.
+        # compares FULL action names (move:roost) — the streak never matched
+        # when stored stripped, which is how battle-44 roosted 8 turns untaxed.
         if options[0][0].startswith("move:"):
-            move_id = options[0][0][5:].split("|")[0]
-            entry = T.MOVES.get(move_id, {})
-            if (move_id == self._last_action and not entry.get("power")
-                    and self._same_streak > 0):
-                taxed = [(n, e - 0.03 * (1 + self._same_streak) if n == options[0][0] else e, o)
+            entry = T.MOVES.get(options[0][0][5:].split("|")[0], {})
+            if options[0][0] == self._last_action and not entry.get("power"):
+                taxed = [(n, e - 0.04 * (1 + self._same_streak) if n == options[0][0] else e, o)
                          for n, e, o in options]
                 taxed.sort(key=lambda x: x[1], reverse=True)
                 options = taxed
