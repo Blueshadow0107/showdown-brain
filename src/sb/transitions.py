@@ -26,10 +26,18 @@ def load():
     SETS = json.load(open(DATA / "randbats-sets.json"))
 
 
+def _ensure():
+    """Self-load for consumers that never call load() (e.g. feature builders
+    that only reach us through _momentum)."""
+    if SPECIES is None:
+        load()
+
+
 BOOSTS = ["atk", "def", "spa", "spd", "spe"]
 
 
 def effective_speed(mon: dict, state: dict) -> float:
+    _ensure()
     """Speed for ordering comparisons. Trick Room inverts (returned as a
     negative so 'higher = acts first' still holds). Paralysis halves."""
     if not mon:
@@ -43,6 +51,7 @@ def effective_speed(mon: dict, state: dict) -> float:
 
 
 def damaging_moves(mon: dict, pool_from_sets: bool = True) -> list[str]:
+    _ensure()
     """Known damaging moves, or the species' randbats movepool as a prior."""
     moves = [m for m in mon.get("moves", [])
              if MOVES.get(m, {}).get("power")
@@ -61,6 +70,7 @@ def damaging_moves(mon: dict, pool_from_sets: bool = True) -> list[str]:
 
 
 def kill_clock(attacker: dict, defender: dict, state: dict) -> int:
+    _ensure()
     """Turns of best-move damage for `attacker` to KO `defender` (1, 2, or 3
     meaning 'three or more' = not pressuring). The who-forces-who clock."""
     if not attacker or not defender or defender["hp"] <= 0:
@@ -77,6 +87,7 @@ def kill_clock(attacker: dict, defender: dict, state: dict) -> int:
 
 
 def has_priority(mon: dict) -> bool:
+    _ensure()
     """Does this mon run a damaging priority move (known or from its sets)?"""
     return any((MOVES.get(m, {}).get("priority") or 0) > 0
                for m in damaging_moves(mon))
@@ -87,6 +98,7 @@ def boost_mult(stage: int) -> float:
 
 
 def estimate_stats(species_id: str, level: int, evs: dict | None = None) -> dict:
+    _ensure()
     """HP + five stats; EVs default to randbats-ish 85 flat unless given."""
     sp = SPECIES.get(resolve_species(species_id), {})
     bs = sp["baseStats"]
@@ -102,6 +114,7 @@ def estimate_stats(species_id: str, level: int, evs: dict | None = None) -> dict
 
 
 def avg_set_evs(species_id: str) -> dict:
+    _ensure()
     """Average EV spread across that species' randbats sets (our belief prior)."""
     entry = SETS.get(resolve_species(species_id))
     if not entry or not entry.get("sets"):
@@ -118,6 +131,7 @@ def avg_set_evs(species_id: str) -> dict:
 
 
 def tera_prior(species_id: str) -> str | None:
+    _ensure()
     """First listed randbats tera type for a species (our pre-tera belief)."""
     entry = SETS.get(resolve_species(species_id))
     if entry and entry.get("sets"):
@@ -128,6 +142,7 @@ def tera_prior(species_id: str) -> str | None:
 
 
 def defender_types(mon: dict) -> list[str]:
+    _ensure()
     if mon.get("tera"):
         return [mon["tera"]]
     sp = SPECIES.get(resolve_species(mon["species"]), {})
@@ -137,6 +152,7 @@ def defender_types(mon: dict) -> list[str]:
 
 
 def effectiveness(move_type: str, mon: dict) -> float:
+    _ensure()
     mult = 1.0
     for t in defender_types(mon):
         mult *= MATRIX.get(move_type, {}).get(t, 1)
@@ -161,6 +177,7 @@ def terrain_mult(move_type: str, terrain, grounded: bool = True) -> float:
 def damage(attacker: dict, defender: dict, move_id: str, state: dict,
            att_stats: dict | None = None, def_stats: dict | None = None) -> float:
     """Expected damage fraction of defender's max HP (0 if status/no power)."""
+    _ensure()
     entry = MOVES.get(move_id)
     if not entry or entry["category"] == "status" or not entry.get("power"):
         return 0.0
@@ -240,6 +257,7 @@ def apply_entry_hazards(mon: dict, hazards: dict):
     """Charge a just-switched-in mon its entry hazards (mutates in place):
     stealth rock (type-aware, up to 1/2 vs 4x weak), spikes per layer
     (grounded only), toxic spikes (status), sticky web (-1 spe)."""
+    _ensure()
     if not mon or mon["hp"] <= 0:
         return
     hp_loss = 0.0
