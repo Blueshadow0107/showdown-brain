@@ -150,13 +150,21 @@ class VsAgentDoubles(Player):
         d = 0.0
         if entry.get("category") != "status" and entry.get("power"):
             if entry.get("target") in ("allAdjacent", "allAdjacentFoes"):
-                # spread: 0.75x to each foe active; ally damage not modelled (v1)
+                # spread: 0.75x to each foe active; allAdjacent also clips the ally
                 for fi in foes_alive:
                     foe = foes[fi]
                     d_spread = T.damage(me, foe, move_id, s2) * 0.75
                     d += d_spread
                     foe["hp"] = max(0.0, foe["hp"] - d_spread)
                     self._faint_foe(s2, foe)
+                if entry.get("target") == "allAdjacent":
+                    ally = s2["my"]["active"][1 - slot_i]
+                    if ally and ally["hp"] > 0:
+                        d_ally = T.damage(me, ally, move_id, s2) * 0.75
+                        ally["hp"] = max(0.0, ally["hp"] - d_ally)
+                        if ally["hp"] == 0:
+                            s2["my"]["fainted"] = min(6, s2["my"]["fainted"] + 1)
+                            s2["my"]["remaining"] = max(0, s2["my"]["remaining"] - 1)
                 target_idx, target = None, None
             elif target is not None:
                 # single target: aim at the foe active taking max damage
