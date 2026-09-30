@@ -187,6 +187,15 @@ class DoublesBattle(Battle):
         snap_sides, weather, terrain, trick_room = self.snap
         me = snap_sides[actor_side]
         foe = snap_sides[flip(actor_side)]
+        state = {
+            "weather": weather,
+            "terrain": terrain,
+            "trick_room": trick_room,
+            "my": self.side_public(me),
+            "foe": self.side_public(foe),
+        }
+        # doubles snapshots are taken at |turn| (pre-decision by construction);
+        # the state_pre key keeps the row schema uniform with the singles parser
         self.rows.append({
             "game": self.id,
             "turn": self.turn,
@@ -194,13 +203,8 @@ class DoublesBattle(Battle):
             "slot": actor_side + slot,
             "action_kind": action_kind,
             "action_id": action_id,
-            "state": {
-                "weather": weather,
-                "terrain": terrain,
-                "trick_room": trick_room,
-                "my": self.side_public(me),
-                "foe": self.side_public(foe),
-            },
+            "state": state,
+            "state_pre": state,
         })
 
     def finish(self):

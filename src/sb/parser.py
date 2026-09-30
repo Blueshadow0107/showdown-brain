@@ -116,24 +116,30 @@ class Battle:
             "screens": dict(s.screens),
         }
 
-    def emit(self, actor_side: str, action_kind: str, action_id: str):
+    def _row_state(self, actor_side: str) -> dict:
         me = self.sides[actor_side]
         foe_side = "p2" if actor_side == "p1" else "p1"
         foe = self.sides[foe_side]
-        self.rows.append({
+        return {
+            "weather": self.weather,
+            "terrain": self.terrain,
+            "trick_room": self.trick_room,
+            "my": self.side_public(me),
+            "foe": self.side_public(foe),
+        }
+
+    def emit(self, actor_side: str, action_kind: str, action_id: str, pre: dict | None = None):
+        row = {
             "game": self.id,
             "turn": self.turn,
             "player": actor_side,
             "action_kind": action_kind,
             "action_id": action_id,
-            "state": {
-                "weather": self.weather,
-                "terrain": self.terrain,
-                "trick_room": self.trick_room,
-                "my": self.side_public(me),
-                "foe": self.side_public(foe),
-            },
-        })
+            "state": self._row_state(actor_side),
+        }
+        if pre is not None:
+            row["state_pre"] = pre
+        self.rows.append(row)
 
     def finish(self):
         for r in self.rows:
@@ -149,6 +155,8 @@ class Battle:
         side = self.sides[side_of(pos)]
         nick = pos.split(": ", 1)[1] if ": " in pos else pos
         species = to_id(details.split(",")[0])
+        actor = side_of(pos)
+        pre = self._row_state(actor) if not forced and self.turn >= 1 else None
         mon = side.mon(nick)
         if mon.fainted:  # revived (Revival Blessing) — no longer fainted
             mon.fainted = False
@@ -165,7 +173,7 @@ class Battle:
                 mon.maxhp = mx
             mon.hp = cur / mon.maxhp if mon.maxhp else 0.0
         if not forced and self.turn >= 1:
-            self.emit(side_of(pos), "switch", species)
+            self.emit(actor, "switch", species, pre=pre)
 
     def h_move(self, parts):
         pos, mv = parts[2], parts[3]
@@ -175,10 +183,13 @@ class Battle:
         mon = side.mon(nick)
         if mon.species == "":
             mon.species = to_id(nick)
-        mon.moves.add(to_id(mv))
+        pre = None
         if not self.emitted[s]:
+            pre = self._row_state(s)
+        mon.moves.add(to_id(mv))
+        if pre is not None:
             self.emitted[s] = True
-            self.emit(s, "move", to_id(mv))
+            self.emit(s, "move", to_id(mv), pre=pre)
 
     def h_damage(self, parts):
         pos, hp = parts[2], parts[3]
