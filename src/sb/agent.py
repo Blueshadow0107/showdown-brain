@@ -11,7 +11,7 @@ import lightgbm as lgb
 import numpy as np
 from poke_env.player import Player
 
-from sb import features, transitions as T
+from sb import features, pi2, transitions as T
 from sb.features import state_features, to_id
 from sb.showdown_state import battle_to_state, _mon_public
 
@@ -24,6 +24,11 @@ class VsAgent(Player):
         features._load()
         T.load()
         self.v = lgb.Booster(model_file=str(ROOT / "models" / "v_model.txt"))
+        try:
+            self.pi2 = pi2.load()
+        except FileNotFoundError:
+            self.pi2 = None  # opponent model falls back to pessimistic max-damage
+        self._ctx = None     # per-decision cache for the opponent-response model
         self.log_path = log_path
         self._log = open(log_path, "a") if log_path else None
 
@@ -31,27 +36,52 @@ class VsAgent(Player):
         x = np.array([state_features(state)], dtype="float32")
         return float(self.v.predict(x)[0])
 
-    def _opp_moves(self, state: dict) -> list[str]:
+    def _opp_ctx(self, state: dict) -> dict:
+        """Opponent-response model, cached per decision (choose_move resets).
+
+        pi2 available: distribution over the foe's damaging moves (renormalized)
+        weighted by P(move | foe-perspective state). Missing: uniform over the
+        same pool (pure max-damage pessimism is gone; the pool itself is the cap).
+        """
+        if self._ctx is not None:
+            return self._ctx
         foe = state["foe"]["active"] or {}
         known = [m for m in foe.get("moves", [])
                  if T.MOVES.get(m, {}).get("category") != "status"]
-        if known:
-            return known
-        pool = set()
-        entry = T.SETS.get(foe.get("species", ""))
-        if entry:
-            for s in entry["sets"]:
-                pool.update(to_id(m) for m in s["movepool"])
-        dmg = [m for m in pool
-               if T.MOVES.get(m, {}).get("power") and T.MOVES.get(m, {}).get("category") != "status"]
-        return dmg[:8] or ["tackle"]
+        pool = known
+        if not pool:
+            s = set()
+            entry = T.SETS.get(foe.get("species", ""))
+            if entry:
+                for st in entry["sets"]:
+                    s.update(to_id(m) for m in st["movepool"])
+            pool = [m for m in s
+                    if T.MOVES.get(m, {}).get("power")
+                    and T.MOVES.get(m, {}).get("category") != "status"][:8] or ["tackle"]
+        if self.pi2 is None:
+            ctx = {"p_move": 1.0, "weights": {m: 1.0 / len(pool) for m in pool}}
+        else:
+            flip = {**state, "my": state["foe"], "foe": state["my"]}
+            probs = pi2.action_probs(self.pi2, flip, ["move:" + m for m in pool])
+            w = {m: probs.get("move:" + m, 1e-6) for m in pool}
+            tot = sum(w.values()) or 1.0
+            x = np.asarray(state_features(flip), dtype="float32").reshape(1, -1)
+            self._ctx = {"p_move": float(self.pi2["kind"].predict(x)[0]),
+                         "weights": {m: p / tot for m, p in w.items()}}
+            ctx = self._ctx
+        self._ctx = ctx
+        return ctx
+
+    def _opp_moves(self, state: dict) -> list[str]:
+        return list(self._opp_ctx(state)["weights"])
 
     def _retaliate(self, s2: dict, state: dict):
         me, foe = s2["my"]["active"], s2["foe"]["active"]
         if not me or not foe or foe["hp"] <= 0 or me["hp"] <= 0:
             return
-        worst = max(T.damage(foe, me, om, s2) for om in self._opp_moves(state))
-        me["hp"] = max(0.0, me["hp"] - worst)
+        ctx = self._opp_ctx(state)
+        exp = sum(w * T.damage(foe, me, om, s2) for om, w in ctx["weights"].items())
+        me["hp"] = max(0.0, me["hp"] - ctx["p_move"] * exp)
         if me["hp"] == 0:
             s2["my"]["fainted"] = min(6, s2["my"]["fainted"] + 1)
             s2["my"]["remaining"] = max(0, s2["my"]["remaining"] - 1)
@@ -85,6 +115,7 @@ class VsAgent(Player):
 
     def choose_move(self, battle):
         state = battle_to_state(battle)
+        self._ctx = None  # opponent-response cache lives for one decision
         options = []  # (name, ev, order)
         force = battle.force_switch or not battle.available_moves
         if not force:
