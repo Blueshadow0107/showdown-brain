@@ -327,7 +327,7 @@ class DoublesBattle(Battle):
 
     # ---------- doubles-specific mon events ----------
     def h_singleturn(self, parts):
-        pos, cond = parts[2], strip_prefix(parts[3])
+        pos, cond = parts[2], to_id(strip_prefix(parts[3]))
         sp = split_pos(pos)
         if not sp:
             return
@@ -337,7 +337,7 @@ class DoublesBattle(Battle):
 
     def h_singlemove(self, parts):
         """Glaive Rush-style: lasts until the user's next move, not end of turn."""
-        pos, cond = parts[2], strip_prefix(parts[3])
+        pos, cond = parts[2], to_id(strip_prefix(parts[3]))
         sp = split_pos(pos)
         if not sp:
             return

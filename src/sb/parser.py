@@ -220,12 +220,12 @@ class Battle:
             s: 0 for s in BOOST_STATS}
 
     def h_start(self, parts):
-        pos, cond = parts[2], strip_prefix(parts[3])
+        pos, cond = parts[2], to_id(strip_prefix(parts[3]))
         self.sides[side_of(pos)].mon(pos.split(": ", 1)[1]).volatiles.add(cond)
 
     def h_end(self, parts):
         pos = parts[2]
-        cond = strip_prefix(parts[3]) if len(parts) > 3 else None
+        cond = to_id(strip_prefix(parts[3])) if len(parts) > 3 else None
         mon = self.sides[side_of(pos)].mon(pos.split(": ", 1)[1])
         if cond:
             mon.volatiles.discard(cond)
