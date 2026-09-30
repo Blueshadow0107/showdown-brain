@@ -14,6 +14,7 @@ doubles V model (features_doubles). Differences from singles, by design (v1):
 import copy
 import json
 import pathlib
+import traceback
 
 import lightgbm as lgb
 import numpy as np
@@ -210,8 +211,13 @@ class VsAgentDoubles(Player):
             cands.sort(key=lambda c: c[0], reverse=True)
             cands = cands[:MAX_CANDIDATES_PER_SLOT]
             if not cands:
-                slot_orders.append(PassBattleOrder())
-                slot_log.append({"chosen": "pass", "no_candidates": True})
+                # empty slot with no legal orders: passable only during forced
+                # replacement; otherwise random fallback keeps the joint order legal
+                if force:
+                    slot_orders.append(PassBattleOrder())
+                    slot_log.append({"chosen": "pass", "forced_pass": True})
+                else:
+                    return Player.choose_random_doubles_move(battle)
                 continue
             opts, err = [], None
             for _, name, kind, payload in cands:
@@ -230,10 +236,13 @@ class VsAgentDoubles(Player):
                         ev = self._ev_switch_d(state, i, pub, pos)
                         order = self.create_order(payload)
                     opts.append((name, ev, order))
-                except Exception as e:
-                    err = f"{name}: {e!r}"
-                    opts.append((name, self._v(state, pos) - 0.05,
-                                 self.create_order(payload)))
+                except Exception:
+                    err = traceback.format_exc(limit=4)
+                    continue  # skip poisoned candidate — never let one brick the slot
+            if not opts:
+                slot_orders.append(PassBattleOrder())
+                slot_log.append({"chosen": "pass", "all_candidates_error": err})
+                continue
             opts.sort(key=lambda x: x[1], reverse=True)
             slot_opts.append(opts)
             slot_orders.append(opts[0][2])
@@ -261,7 +270,14 @@ class VsAgentDoubles(Player):
                 "slot0": slot_log[0], "slot1": slot_log[1],
             }) + "\n")
             self._log.flush()
-        orders = DoubleBattleOrder.join_orders([slot_orders[0]], [slot_orders[1]])
-        if not orders:
+        try:
+            orders = DoubleBattleOrder.join_orders([slot_orders[0]], [slot_orders[1]])
+            if not orders:
+                return Player.choose_random_doubles_move(battle)
+            return orders[0]
+        except Exception:
+            if self._log:
+                self._log.write(json.dumps({
+                    "battle": battle.battle_tag, "turn": battle.turn,
+                    "join_error": traceback.format_exc(limit=4)}) + "\n")
             return Player.choose_random_doubles_move(battle)
-        return orders[0]
