@@ -91,10 +91,41 @@ def state_features_d(state: dict, slot: str | None = None) -> list[float]:
     v += side_features_d(state["my"]) + side_features_d(state["foe"])
     letter = slot[-1] if slot else None
     v += one_hot(0 if letter == "a" else 1, 2) if letter in ("a", "b") else [0.0, 0.0]
+    v += _momentum_d(state, slot)
     return v
 
 
-DIM_D = len(F.WEATHERS) + len(F.TERRAINS) + 1 + 2 * (3 + 4 + 4 + 2 * MON_DIM_D) + 2
+def _momentum_d(state: dict, slot: str | None) -> list[float]:
+    """Doubles momentum: best-speed comparison across both slots, the acting
+    slot's kill-clock vs the most dangerous foe clock, priority presence,
+    and per-side switch counters. Mirrors features._momentum (13 dims)."""
+    from sb import transitions as T
+    my_act = [m for m in state["my"]["active"] if m and m["hp"] > 0]
+    foe_act = [m for m in state["foe"]["active"] if m and m["hp"] > 0]
+    letter = slot[-1] if slot else None
+    acting = None
+    if letter in ("a", "b"):
+        cand = state["my"]["active"][0 if letter == "a" else 1]
+        acting = cand if cand and cand["hp"] > 0 else None
+    v: list[float] = []
+    if my_act and foe_act:
+        ms = max(T.effective_speed(m, state) for m in my_act)
+        fs = max(T.effective_speed(m, state) for m in foe_act)
+        v += one_hot(0 if ms > fs * 1.05 else (2 if fs > ms * 1.05 else 1), 3)
+        tgt = acting or my_act[0]
+        press = min(T.kill_clock(tgt, f, state) for f in foe_act)
+        v += one_hot(T.kill_clock(acting, foe_act[0], state) - 1 if acting else 2, 3)
+        v += one_hot(press - 1, 3)
+        v += [1.0 if acting and T.has_priority(acting) else 0.0,
+              1.0 if any(T.has_priority(f) for f in foe_act) else 0.0]
+    else:
+        v += [0.0] * 11
+    v += [min(state["my"].get("switches", 0), 6) / 6,
+          min(state["foe"].get("switches", 0), 6) / 6]
+    return v
+
+
+DIM_D = len(F.WEATHERS) + len(F.TERRAINS) + 1 + 2 * (3 + 4 + 4 + 2 * MON_DIM_D) + 2 + 13
 
 
 def build_matrix_d(rows):

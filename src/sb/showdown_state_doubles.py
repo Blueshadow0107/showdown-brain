@@ -30,7 +30,7 @@ def _mon_public_d(m, pos: str) -> dict:
     }
 
 
-def _side_public_d(team, actives, conditions, pid: str) -> dict:
+def _side_public_d(team, actives, conditions, pid: str, switches: int = 0) -> dict:
     mons = list(team.values())
     fainted = sum(1 for m in mons if m.fainted or m.current_hp_fraction == 0)
     act = []
@@ -52,13 +52,17 @@ def _side_public_d(team, actives, conditions, pid: str) -> dict:
         # time they faint, so the counter is reliable for the foe side too
         "remaining": max(0, 6 - fainted),
         "bench_known": len(bench),
+        "switches": switches,
         "hazards": hazards,
         "screens": {},  # folded into hazards map for features; kept for shape
     }
 
 
-def battle_to_state_d(battle: DoubleBattle) -> dict:
-    """State from the agent player's perspective (matches parser_doubles rows)."""
+def battle_to_state_d(battle: DoubleBattle, switch_counts: dict | None = None) -> dict:
+    """State from the agent player's perspective (matches parser_doubles rows).
+    switch_counts: optional {"my": n, "foe": n} momentum counters maintained
+    by the agent (parser rows carry their own)."""
+    sw = switch_counts or {}
     weather = None
     if battle.weather:
         weather = WEATHER_MAP.get(_key(next(iter(battle.weather))), "snow")
@@ -74,7 +78,9 @@ def battle_to_state_d(battle: DoubleBattle) -> dict:
         "terrain": terrain,
         "trick_room": trick_room,
         "my": _side_public_d(battle.team, battle.active_pokemon,
-                             battle.side_conditions, battle.player_role),
+                             battle.side_conditions, battle.player_role,
+                             sw.get("my", 0)),
         "foe": _side_public_d(battle.opponent_team, battle.opponent_active_pokemon,
-                              battle.opponent_side_conditions, battle.opponent_role),
+                              battle.opponent_side_conditions, battle.opponent_role,
+                              sw.get("foe", 0)),
     }

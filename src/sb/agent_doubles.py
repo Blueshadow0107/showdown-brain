@@ -234,7 +234,19 @@ class VsAgentDoubles(Player):
     def choose_move(self, battle):
         if not isinstance(battle, DoubleBattle):
             return self.choose_random_move(battle)
-        state = battle_to_state_d(battle)
+        # momentum counters: reset per battle; mine counted on switch orders,
+        # foe's by changes to the pair of active species between decisions
+        if getattr(self, "_battle_tag", None) != battle.battle_tag:
+            self._battle_tag = battle.battle_tag
+            self._sw = {"my": 0, "foe": 0}
+            self._last_foe_pair = None
+        foe_pair = tuple(sorted(to_id(m.species) for m in battle.opponent_active_pokemon
+                                if m is not None and not m.fainted))
+        if self._last_foe_pair is not None and foe_pair != self._last_foe_pair:
+            changed = len(set(foe_pair) - set(self._last_foe_pair))
+            self._sw["foe"] += max(1, changed)
+        self._last_foe_pair = foe_pair
+        state = battle_to_state_d(battle, switch_counts=self._sw)
         self._pools = {}
         self._foe_pi_cache = {}
         slot_orders = []
@@ -319,6 +331,7 @@ class VsAgentDoubles(Player):
                 slot_orders[0] = slot_opts[0][1][2]
                 slot_log[0]["chosen"] = slot_opts[0][1][0]
                 slot_log[0]["demoted_duplicate"] = True
+        self._sw["my"] += sum(1 for e in slot_log if e["chosen"].startswith("switch:"))
         if self._log:
             self._log.write(json.dumps({
                 "battle": battle.battle_tag, "turn": battle.turn,

@@ -107,6 +107,7 @@ class DSide:
     teamsize: int = 6
     active: dict = field(default_factory=lambda: {"a": None, "b": None})
     mons: dict = field(default_factory=dict)  # nick -> Mon
+    switches: int = 0                   # voluntary switches (momentum feature)
     hazards: dict = field(default_factory=dict)
     screens: dict = field(default_factory=dict)
 
@@ -177,6 +178,7 @@ class DoublesBattle(Battle):
             "fainted": s.fainted,
             "remaining": max(0, s.teamsize - s.fainted),
             "bench_known": len(bench),
+            "switches": s.switches,
             "hazards": dict(s.hazards),
             "screens": dict(s.screens),
         }
@@ -277,6 +279,8 @@ class DoublesBattle(Battle):
                 mon.maxhp = mx
             mon.hp = cur / mon.maxhp if mon.maxhp else 0.0
         side.active[sl] = nick
+        if not forced:
+            side.switches += 1
         if forced or self.snap is None:
             return
         if self.post_upkeep:
@@ -328,6 +332,7 @@ class DoublesBattle(Battle):
             mon.fainted = m_old.fainted
         mon.species = to_id(details.split(",")[0])
         side.active[sl] = nick
+        # h_replace: an illusion reveal, not a decision — no switch counted
 
     # ---------- doubles-specific mon events ----------
     def h_singleturn(self, parts):
