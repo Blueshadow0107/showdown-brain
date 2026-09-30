@@ -1,4 +1,4 @@
-"""train_v.py — V(s): win probability from battle state. LightGBM, grouped split."""
+"""train_v_doubles.py — V(s) for gen9 random doubles. LightGBM, grouped split."""
 import json
 import pathlib
 import sys
@@ -10,9 +10,9 @@ from sklearn.metrics import auc, log_loss, roc_curve
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from sb.features import build_matrix  # noqa: E402
+from sb.features_doubles import build_matrix_d  # noqa: E402
 
-ROWS = ROOT / "data" / "rows.jsonl"
+ROWS = ROOT / "data" / "rows_doubles.jsonl"
 
 
 def calibration(y_true, p, bins=10):
@@ -30,7 +30,7 @@ def calibration(y_true, p, bins=10):
 def main():
     rows = [json.loads(l) for l in open(ROWS)]
     print(f"{len(rows)} rows")
-    X, y, g = build_matrix(rows)
+    X, y, g = build_matrix_d(rows)
 
     games = np.unique(g)
     rng = np.random.default_rng(7)
@@ -59,8 +59,8 @@ def main():
         "calibration": calibration(yva, p),
     }
     out = ROOT / "models"
-    model.save_model(str(out / "v_model.txt"))
-    json.dump(metrics, open(out / "v_metrics.json", "w"), indent=1)
+    model.save_model(str(out / "v_model_doubles.txt"))
+    json.dump(metrics, open(out / "v_metrics_doubles.json", "w"), indent=1)
     print(json.dumps({k: v for k, v in metrics.items() if k != "calibration"}, indent=1))
     print("calibration (pred vs actual win rate):")
     for c in metrics["calibration"]:
