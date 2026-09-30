@@ -7,7 +7,7 @@ caller's problem (agent falls back to prior/default).
 import copy
 import json
 
-from sb.features import DATA as _FDATA
+from sb.features import DATA as _FDATA, resolve_species
 
 DATA = _FDATA
 
@@ -35,7 +35,7 @@ def boost_mult(stage: int) -> float:
 
 def estimate_stats(species_id: str, level: int, evs: dict | None = None) -> dict:
     """HP + five stats; EVs default to randbats-ish 85 flat unless given."""
-    sp = SPECIES.get(species_id) or SPECIES.get(SPECIES.get(species_id, {}).get("baseSpecies", ""), {})
+    sp = SPECIES.get(resolve_species(species_id), {})
     bs = sp["baseStats"]
     evs = evs or {}
     out = {}
@@ -50,7 +50,7 @@ def estimate_stats(species_id: str, level: int, evs: dict | None = None) -> dict
 
 def avg_set_evs(species_id: str) -> dict:
     """Average EV spread across that species' randbats sets (our belief prior)."""
-    entry = SETS.get(species_id)
+    entry = SETS.get(resolve_species(species_id))
     if not entry or not entry.get("sets"):
         return {}
     keys = ["hp", "atk", "def", "spa", "spd", "spe"]
@@ -66,7 +66,7 @@ def avg_set_evs(species_id: str) -> dict:
 
 def tera_prior(species_id: str) -> str | None:
     """First listed randbats tera type for a species (our pre-tera belief)."""
-    entry = SETS.get(species_id)
+    entry = SETS.get(resolve_species(species_id))
     if entry and entry.get("sets"):
         ts = entry["sets"][0].get("teraTypes") or []
         if ts:
@@ -77,7 +77,7 @@ def tera_prior(species_id: str) -> str | None:
 def defender_types(mon: dict) -> list[str]:
     if mon.get("tera"):
         return [mon["tera"]]
-    sp = SPECIES.get(mon["species"], {})
+    sp = SPECIES.get(resolve_species(mon["species"]), {})
     if "types" not in sp and sp.get("baseSpecies"):
         sp = SPECIES.get(sp["baseSpecies"], {})
     return sp.get("types", [])

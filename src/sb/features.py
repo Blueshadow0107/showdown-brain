@@ -51,6 +51,43 @@ def _load():
     FEATURE_NAMES = None
 
 
+_FORMES = None
+
+
+def _forme_map() -> dict:
+    """forme-id -> base-species-id, from poke-env's dex (which carries every
+    cosmetic forme). Lazily built; empty if poke-env data is unavailable."""
+    global _FORMES
+    if _FORMES is None:
+        try:
+            from poke_env.data import GenData
+            dex = GenData(9).pokedex
+            _FORMES = {k: to_id(v["baseSpecies"]) for k, v in dex.items()
+                       if isinstance(v, dict) and v.get("baseSpecies")}
+        except Exception:
+            _FORMES = {}
+    return _FORMES
+
+
+def resolve_species(species_id: str) -> str:
+    """Follow baseSpecies chains so cosmetic/inherited formes (florgesblue,
+    burmysandy, deerlingwinter, ...) map to the entry that actually carries
+    baseStats. Absent ids are returned unchanged (lookups then default)."""
+    sid = species_id
+    for _ in range(3):
+        sp = SPECIES.get(sid) if SPECIES else None
+        if sp is not None:
+            if "baseStats" in sp or not sp.get("baseSpecies"):
+                return sid
+            sid = to_id(sp["baseSpecies"])
+            continue
+        base = _forme_map().get(sid)  # cosmetic forme missing from species.json
+        if not base:
+            return sid
+        sid = base
+    return sid
+
+
 def one_hot(idx, n):
     return [1.0 if i == idx else 0.0 for i in range(n)]
 
@@ -59,7 +96,7 @@ def mon_features(m: dict | None) -> list[float]:
     if not m:
         return [0.0] * MON_DIM
     v = []
-    sp = SPECIES.get(m["species"])
+    sp = SPECIES.get(resolve_species(m["species"]))
     if sp and "types" not in sp and sp.get("baseSpecies"):
         sp = SPECIES.get(to_id(sp["baseSpecies"]), sp)  # cosmetic formes inherit base stats
     if sp and "types" in sp:

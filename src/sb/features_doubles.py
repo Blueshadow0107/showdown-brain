@@ -28,7 +28,7 @@ def mon_features_d(m: dict | None) -> list[float]:
     if not m:
         return [0.0] * MON_DIM_D
     v = []
-    sp = F.SPECIES.get(m["species"])
+    sp = F.SPECIES.get(F.resolve_species(m["species"]))
     if sp and "types" not in sp and sp.get("baseSpecies"):
         sp = F.SPECIES.get(F.to_id(sp["baseSpecies"]), sp)
     if sp and "types" in sp:
