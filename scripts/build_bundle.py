@@ -129,7 +129,9 @@ def main():
 
     OUT.parent.mkdir(parents=True, exist_ok=True)
     raw = json.dumps(bundle, separators=(",", ":"))
-    OUT.write_text(raw)
+    tmp = OUT.with_suffix(".json.tmp")
+    tmp.write_text(raw)  # atomic publish: temp + rename so concurrent readers
+    tmp.replace(OUT)     # never see a torn file (one got interleaved once)
     gz = gzip.compress(raw.encode(), compresslevel=9)
     (OUT.parent / "gamebundle.json.gz").write_bytes(gz)
 

@@ -1,0 +1,414 @@
+{
+ "_schema": "gamebundle v1. all entity tables are {ids, rows/tags/sets}; cross-references are INTEGER INDICES into the named vocab. typechart: flat row-major over types[], damage multiplier x4 (0=immune,1=0.25x,2=0.5x,4=1x,8=2x,16=4x). move rows: [type, category, power, accuracy, pp, priority, target]. species rows: [type1, type2(-1 pad), hp, atk, def, spa, spd, spe, ability0, ability1, abilityH(-1 pad)]. set rows: [role, [moveIdx], [abilityIdx], [teraTypeIdx], [evs x6]].",
+ "vocab": {
+  "types": [
+   "Normal",
+   "Fire",
+   "Water",
+   "Electric",
+   "Grass",
+   "Ice",
+   "Fighting",
+   "Poison",
+   "Ground",
+   "Flying",
+   "Psychic",
+   "Bug",
+   "Rock",
+   "Ghost",
+   "Dragon",
+   "Dark",
+   "Steel",
+   "Fairy",
+   "Stellar"
+  ],
+  "categories": [
+   "Physical",
+   "Special",
+   "Status"
+  ],
+  "targets": [
+   "adjacentAlly",
+   "adjacentAllyOrSelf",
+   "adjacentFoe",
+   "all",
+   "allAdjacent",
+   "allAdjacentFoes",
+   "allies",
+   "allySide",
+   "allyTeam",
+   "any",
+   "foeSide",
+   "normal",
+   "randomNormal",
+   "scripted",
+   "self"
+  ],
+  "tags": {
+   "item": [
+    "affects_switching",
+    "berry",
+    "choice",
+    "consumable",
+    "crit",
+    "defense",
+    "field",
+    "forme-change",
+    "hazard-interact",
+    "modifies_damage",
+    "momentum",
+    "offense",
+    "priority",
+    "recovery",
+    "screen",
+    "speed",
+    "status",
+    "switching",
+    "terrain",
+    "utility",
+    "weather"
+   ],
+   "ability": [
+    "boost",
+    "contact",
+    "crit",
+    "defense",
+    "entry",
+    "hazard-interact",
+    "immunity",
+    "offense",
+    "priority",
+    "recovery",
+    "speed",
+    "status",
+    "switching",
+    "terrain",
+    "weather"
+   ]
+  },
+  "roles": [
+   "AV Pivot",
+   "Bulky Attacker",
+   "Bulky Protect",
+   "Bulky Setup",
+   "Bulky Support",
+   "Choice Item user",
+   "Doubles Bulky Attacker",
+   "Doubles Bulky Setup",
+   "Doubles Fast Attacker",
+   "Doubles Setup Sweeper",
+   "Doubles Support",
+   "Doubles Wallbreaker",
+   "Fast Attacker",
+   "Fast Bulky Setup",
+   "Fast Support",
+   "Offensive Protect",
+   "Setup Sweeper",
+   "Tera Blast user",
+   "Wallbreaker"
+  ]
+ },
+ "counts": {
+  "moves": 954,
+  "abilities": 321,
+  "items": 583,
+  "species": 1481,
+  "typechart_cells": 361,
+  "randbats_species": {
+   "singles": 509,
+   "doubles": 504
+  }
+ },
+ "samples": {
+  "moves": {
+   "ids": [
+    "10000000voltthunderbolt",
+    "absorb",
+    "accelerock"
+   ],
+   "rows": [
+    [
+     3,
+     1,
+     195,
+     0,
+     1,
+     0,
+     11
+    ],
+    [
+     4,
+     1,
+     20,
+     100,
+     25,
+     0,
+     11
+    ],
+    [
+     12,
+     0,
+     40,
+     100,
+     20,
+     1,
+     11
+    ]
+   ]
+  },
+  "abilities": {
+   "ids": [
+    "adaptability",
+    "aerilate",
+    "aftermath"
+   ],
+   "tags": [
+    [],
+    [],
+    [
+     1
+    ]
+   ]
+  },
+  "items": {
+   "ids": [
+    "abilityshield",
+    "abomasite",
+    "absolite"
+   ],
+   "tags": [
+    [
+     19
+    ],
+    [
+     7,
+     20
+    ],
+    [
+     7,
+     11
+    ]
+   ]
+  },
+  "species": {
+   "ids": [
+    "ababo",
+    "abomasnow",
+    "abomasnowmega"
+   ],
+   "rows": [
+    [
+     17,
+     -1,
+     42,
+     35,
+     27,
+     35,
+     35,
+     38,
+     180,
+     205,
+     172
+    ],
+    [
+     4,
+     5,
+     90,
+     92,
+     75,
+     92,
+     85,
+     60,
+     243,
+     247,
+     -1
+    ],
+    [
+     4,
+     5,
+     90,
+     132,
+     105,
+     132,
+     105,
+     30,
+     243,
+     -1,
+     -1
+    ]
+   ]
+  },
+  "randbats": {
+   "1382": {
+    "level": 84,
+    "sets": [
+     [
+      4,
+      [
+       302,
+       466,
+       758,
+       761,
+       826
+      ],
+      [
+       28,
+       171
+      ],
+      [
+       2,
+       16
+      ],
+      [
+       0,
+       0,
+       0,
+       0,
+       0,
+       0
+      ]
+     ],
+     [
+      1,
+      [
+       206,
+       223,
+       453,
+       758,
+       761,
+       846,
+       888
+      ],
+      [
+       28,
+       171
+      ],
+      [
+       2,
+       15,
+       16
+      ],
+      [
+       0,
+       0,
+       0,
+       0,
+       0,
+       0
+      ]
+     ]
+    ]
+   },
+   "186": {
+    "level": 85,
+    "sets": [
+     [
+      12,
+      [
+       207,
+       261,
+       276,
+       409,
+       938
+      ],
+      [
+       24
+      ],
+      [
+       1,
+       8,
+       14
+      ],
+      [
+       0,
+       0,
+       0,
+       0,
+       0,
+       0
+      ]
+     ],
+     [
+      16,
+      [
+       188,
+       207,
+       263,
+       588,
+       844
+      ],
+      [
+       24
+      ],
+      [
+       8,
+       14
+      ],
+      [
+       0,
+       0,
+       0,
+       0,
+       0,
+       0
+      ]
+     ]
+    ]
+   },
+   "116": {
+    "level": 80,
+    "sets": [
+     [
+      16,
+      [
+       207,
+       411,
+       422,
+       735
+      ],
+      [
+       288
+      ],
+      [
+       2,
+       8,
+       16
+      ],
+      [
+       0,
+       0,
+       0,
+       0,
+       0,
+       0
+      ]
+     ],
+     [
+      17,
+      [
+       411,
+       422,
+       735,
+       866
+      ],
+      [
+       288
+      ],
+      [
+       3,
+       4
+      ],
+      [
+       0,
+       0,
+       0,
+       0,
+       0,
+       0
+      ]
+     ]
+    ]
+   }
+  }
+ }
+}
