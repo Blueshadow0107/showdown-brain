@@ -52,11 +52,17 @@ def call_api(body: dict, key: str, max_retries: int = 5) -> dict:
     raise RuntimeError("unreachable")
 
 
+CACHE_VER = 2  # bump when state description / questions change -> re-judge
+
+
 def describe_side(side: dict) -> dict:
     m = side.get("active")
+    fainted = bool(m) and m["hp"] == 0
     return {
         "active": m["species"] if m else None,
-        "hp_pct": round(100 * m["hp"]) if m else 0,
+        "active_hp_pct": round(100 * m["hp"]) if m else 0,
+        # unmissable: a fainted active is about to be replaced and cannot act
+        "active_fainted_this_turn": fainted,
         "boosts": m.get("boosts", {}) if m else {},
         "status": m.get("status") if m else None,
         "fainted": side["fainted"],
@@ -91,6 +97,14 @@ def build_batch(states: list[dict]) -> dict:
             ),
             "criteria": {"me": "mine is ahead", "even": "roughly even",
                          "foe": "theirs is ahead"},
+        }
+        # forced check on the axis Jev failed (ignored 0%-HP actives): noul
+        questions[f"s{i}_active_ok"] = {
+            "type": "noul",
+            "instructions": (
+                f"For `{p}`: is `{p}.mine.active` able to fight right now? "
+                f"Answer FALSE if `active_fainted_this_turn` is true or HP is 0."
+            ),
         }
     return {"model": "jev-latest",
             "state": {"winprob": WINPROB_LEVELS, "states": entities},
@@ -133,7 +147,7 @@ def main():
     pending_keys = []
     for r in sample:
         k = f"{r['game']}:{r['turn']}:{r['player']}"
-        if k not in cache:
+        if k not in cache or cache[k].get("ver", 1) < CACHE_VER:
             pending_keys.append((k, r))
 
     for i in range(0, len(pending_keys), args.batch):
@@ -150,10 +164,12 @@ def main():
             wp = answers[f"s{j}_winprob"]
             ah = answers[f"s{j}_ahead"]
             cache[k] = {
+                "ver": CACHE_VER,
                 # score is a continuous expected index over the levels
                 "winprob": round(wp["score"] / (len(WINPROB_LEVELS) - 1) * 100),
                 "winprob_conf": round(wp.get("confidence", 0), 3),
                 "ahead": max(ah["probabilities"], key=ah["probabilities"].get),
+                "active_ok": round(answers[f"s{j}_active_ok"]["noul"], 3),
                 "outcome": r["outcome"],
                 "turn": r["turn"],
             }

@@ -57,12 +57,15 @@ project's core advantage over free-teambuild formats.
 ```bash
 uv sync
 uv run python -m sb.harvest --limit 200 --rating-min 1400
-uv run python -m sb.parser
-uv run python scripts/train_v.py     # -> models/v_model.txt
-uv run python scripts/train_pi2.py   # -> models/pi2_*.txt
-uv run python scripts/selfplay.py    # bot vs baseline on a local server
-uv run python scripts/human.py       # bot accepts one human challenge
+uv run python -m sb.parser         # -> data/rows_v2.jsonl (v2 states)
+uv run python -m sb.parser_doubles # -> data/rows_v2_doubles.jsonl
+uv run python scripts/train_v_v2.py     # -> models/v2_model.txt
+uv run python scripts/train_pi2.py      # -> data/pi2_*
+uv run python scripts/gauntlet.py      # self-gauntlet + online learning
+uv run python scripts/serve.py         # THE lobby bot (singles + doubles)
 ```
+
+See ARCHITECTURE.md for the system layout and contribution rules.
 
 ## Gotchas
 

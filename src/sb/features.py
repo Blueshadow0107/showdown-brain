@@ -72,19 +72,21 @@ def _forme_map() -> dict:
 def resolve_species(species_id: str) -> str:
     """Follow baseSpecies chains so cosmetic/inherited formes (florgesblue,
     burmysandy, deerlingwinter, ...) map to the entry that actually carries
-    baseStats. Absent ids are returned unchanged (lookups then default)."""
+    baseStats. Covers three shapes: absent ids, entries with a baseSpecies
+    pointer, and stats-less entries with NO pointer (vivillon patterns) that
+    only the full dex forme map can place."""
     if SPECIES is None:
         _load()
     sid = species_id
     for _ in range(3):
-        sp = SPECIES.get(sid) if SPECIES else None
-        if sp is not None:
-            if "baseStats" in sp or not sp.get("baseSpecies"):
-                return sid
+        sp = SPECIES.get(sid)
+        if sp is not None and "baseStats" in sp:
+            return sid
+        if sp is not None and sp.get("baseSpecies"):
             sid = to_id(sp["baseSpecies"])
             continue
-        base = _forme_map().get(sid)  # cosmetic forme missing from species.json
-        if not base:
+        base = _forme_map().get(sid)  # absent or pointer-less stats-less entry
+        if not base or base == sid:
             return sid
         sid = base
     return sid
@@ -101,7 +103,7 @@ def mon_features(m: dict | None) -> list[float]:
     sp = SPECIES.get(resolve_species(m["species"]))
     if sp and "types" not in sp and sp.get("baseSpecies"):
         sp = SPECIES.get(to_id(sp["baseSpecies"]), sp)  # cosmetic formes inherit base stats
-    if sp and "types" in sp:
+    if sp and "types" in sp and "baseStats" in sp:
         t1 = TYPES.index(sp["types"][0]) if sp["types"][0] in TYPES else len(TYPES) - 1
         v += one_hot(t1, len(TYPES))
         if len(sp["types"]) > 1 and sp["types"][1] in TYPES:

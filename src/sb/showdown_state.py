@@ -38,8 +38,8 @@ def _mon_public_v2(m, active: bool) -> dict:
         "fainted": bool(m.fainted),
         "item_known": m.item is not None,
         "ability_known": m.ability is not None,
-        "pp_used": {mv.id: max(0, (mv.pp or 0) - (mv.current_pp or 0))
-                    for mv in m.moves.values() if mv.pp},
+        "pp_used": {mv.id: max(0, mv.max_pp - mv.current_pp)
+                    for mv in m.moves.values() if mv.current_pp < mv.max_pp},
         "last_move": None,
         "consecutive": None,
         "times_entered": None,

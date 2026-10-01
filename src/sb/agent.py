@@ -11,29 +11,53 @@ import lightgbm as lgb
 import numpy as np
 from poke_env.player import Player
 
-from sb import features, pi2, transitions as T
+from sb import features, features_v2, pi2, transitions as T
 from sb.features import state_features, to_id
+from sb.heuristics import H
 from sb.showdown_state import battle_to_state, _mon_public
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 
 
 class VsAgent(Player):
-    def __init__(self, *args, log_path=None, **kwargs):
+    def __init__(self, *args, log_path=None, brain: dict | None = None, **kwargs):
         super().__init__(*args, **kwargs)
         features._load()
         T.load()
-        self.v = lgb.Booster(model_file=str(ROOT / "models" / "v_model.txt"))
-        try:
-            self.pi2 = pi2.load()
-        except FileNotFoundError:
-            self.pi2 = None  # opponent model falls back to pessimistic max-damage
+        brain = brain or {}
+        if brain.get("featurizer") == "v2":
+            self._featurize = features_v2.state_features_v2
+        elif brain.get("featurizer") == "v1-classic":
+            # pre-momentum models (287 dims): v1 vector minus the 13-dim
+            # momentum block appended at the end of state_features
+            self._featurize = lambda s: state_features(s)[:-features.MOMENTUM_DIM]
+        else:
+            self._featurize = state_features
+        self.v = lgb.Booster(model_file=str(ROOT / "models" / brain.get("model", "v_model.txt")))
+        if brain.get("pi2", True):
+            try:
+                self.pi2 = pi2.load()
+            except FileNotFoundError:
+                self.pi2 = None  # opponent model falls back to uniform pool weights
+        else:
+            self.pi2 = None
         self._ctx = None     # per-decision cache for the opponent-response model
         self.log_path = log_path
         self._log = open(log_path, "a") if log_path else None
 
+    def _ensure_attrs(self):
+        """Long-running daemon safety: poke-env may invoke choose_move on an
+        instance whose __init__ was interrupted (e.g. a model file swap mid-
+        startup); never let a missing attr brick a live battle."""
+        for name, default in (("pi2", None), ("_log", None), ("_ctx", None),
+                              ("_sw", None), ("_last_action", None),
+                              ("_same_streak", 0), ("_battle_tag", None),
+                              ("_last_foe_active", None)):
+            if not hasattr(self, name):
+                setattr(self, name, default)
+
     def _v(self, state: dict) -> float:
-        x = np.array([state_features(state)], dtype="float32")
+        x = np.array([self._featurize(state)], dtype="float32")
         return float(self.v.predict(x)[0])
 
     def _opp_ctx(self, state: dict) -> dict:
@@ -104,7 +128,7 @@ class VsAgent(Player):
             if not me or me["hp"] == 0:
                 base = self._v(s2)
                 if state["my"]["remaining"] <= 1:
-                    base -= 0.06
+                    base -= H.urgency_penalty
                 return base
         if entry.get("category") != "status":
             d = T.damage(me, foe, move_id, s2, defender_screens=s2["foe"].get("screens"))
@@ -122,12 +146,12 @@ class VsAgent(Player):
             self._retaliate(s2, state)
         base = self._v(s2)
         if not modelled:
-            base -= 0.02
+            base -= H.unmodelled_penalty
         # endgame urgency: on our last mon, a non-damaging turn we don't
         # survive is a wasted turn — V's coarse features can't price it
         died = not me or me["hp"] == 0
         if state["my"]["remaining"] <= 1 and died and d == 0 and not ko:
-            base -= 0.06
+            base -= H.urgency_penalty
         return base
 
     def _ev_switch(self, state: dict, bench_mon) -> float:
@@ -144,6 +168,7 @@ class VsAgent(Player):
         return self._v(s2)
 
     def choose_move(self, battle):
+        self._ensure_attrs()
         # momentum counters: reset per battle; my switches counted on choice,
         # foe switches inferred from active-species changes between turns
         if getattr(self, "_battle_tag", None) != battle.battle_tag:
@@ -168,7 +193,7 @@ class VsAgent(Player):
                 try:
                     ev = self._ev_move(state, m.id)
                 except Exception as e:
-                    ev = self._v(state) - 0.05
+                    ev = self._v(state) - 2 * H.unmodelled_penalty
                     move_opts.append((f"move:{m.id}", ev, self.create_order(m)))
                     if self._log:
                         self._log.write(json.dumps({"battle": battle.battle_tag,
@@ -195,7 +220,7 @@ class VsAgent(Player):
                         ev = self._ev_move(state, move_id, tera_type=tera_type)
                     except Exception:
                         continue
-                    if ev > plain_best + 0.03:
+                    if ev > plain_best + H.tera_margin:
                         m = next(m for m in battle.available_moves if m.id == move_id)
                         options.append((f"move:{move_id}|tera:{tera_type}", ev,
                                         self.create_order(m, terastallize=True)))
@@ -203,7 +228,7 @@ class VsAgent(Player):
             try:
                 ev = self._ev_switch(state, s)
             except Exception as e:
-                ev = self._v(state) - 0.05
+                ev = self._v(state) - 2 * H.unmodelled_penalty
                 options.append((f"switch:{to_id(s.species)}", ev, self.create_order(s)))
                 if self._log:
                     self._log.write(json.dumps({"battle": battle.battle_tag,
@@ -219,7 +244,7 @@ class VsAgent(Player):
         if not force and options[0][0].startswith("switch:"):
             best_move = max((e for n, e, _ in options if n.startswith("move:")),
                             default=None)
-            if best_move is not None and options[0][1] - best_move < 0.025:
+            if best_move is not None and options[0][1] - best_move < H.switch_margin:
                 stay = [o for o in options if o[0].startswith("move:")] or options
                 stay.sort(key=lambda x: x[1], reverse=True)
                 options = stay
@@ -231,7 +256,7 @@ class VsAgent(Player):
         if options[0][0].startswith("move:"):
             entry = T.MOVES.get(options[0][0][5:].split("|")[0], {})
             if options[0][0] == self._last_action and not entry.get("power"):
-                taxed = [(n, e - 0.04 * (1 + self._same_streak) if n == options[0][0] else e, o)
+                taxed = [(n, e - H.repeat_tax_base * (1 + self._same_streak) if n == options[0][0] else e, o)
                          for n, e, o in options]
                 taxed.sort(key=lambda x: x[1], reverse=True)
                 options = taxed

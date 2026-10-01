@@ -40,6 +40,8 @@ async def local_login(self, split_message):
         assertion = json.loads(r.text[1:])["assertion"]
     else:
         assertion = ""
+    print(f"[login-debug] {self.username}: /trn assertion {assertion[:60]}...",
+          flush=True)
     await self.send_message(f"/trn {self.username},0,{assertion}")
     await self.change_avatar(self._avatar)
 
@@ -75,7 +77,9 @@ async def main():
                                server_configuration=LOCAL,
                                battle_format="gen9randomdoublesbattle",
                                start_timer_on_battle_start=True)
-    print("both players up — challenging", flush=True)
+    print("both players up — waiting for logins, then challenging", flush=True)
+    await asyncio.gather(king.ps_client.logged_in.wait(),
+                         base.ps_client.logged_in.wait())
     await asyncio.gather(
         base.send_challenges(to_id_str(bot_acc.username), 1),
         king.accept_challenges(to_id_str(base_acc.username), 1),

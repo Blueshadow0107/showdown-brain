@@ -26,10 +26,11 @@ from poke_env.player.battle_order import DoubleBattleOrder, PassBattleOrder
 from sb import features, features_doubles as FD, pi2doubles, transitions as T
 from sb.features import to_id
 from sb.showdown_state_doubles import battle_to_state_d, _mon_public_d
+from sb.heuristics import H
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 
-MAX_CANDIDATES_PER_SLOT = 8  # decision budget: sorted by rough power, then switches
+MAX_CANDIDATES_PER_SLOT = H.doubles_max_candidates  # decision budget: sorted by rough power, then switches
 
 SETS_D = None
 

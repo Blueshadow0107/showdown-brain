@@ -69,8 +69,8 @@ uv sync
 export SHOWDOWN_BOT_USER=mybot SHOWDOWN_BOT_PASS=hunter2
 # (or put {"username": ..., "password": ...} in data/bot-account.json — never committed)
 
-# 3. run it — waits for ONE challenge from anyone
-uv run python scripts/human.py
+# 3. run it — lobby-visible, accepts singles AND doubles, forever
+uv run python scripts/serve.py
 ```
 
 Then open your server in a browser, find the bot's username, and challenge it
@@ -83,12 +83,18 @@ shipped in this repo.
 
 ```bash
 uv sync
-uv run python -m sb.harvest --limit 4000 --rating-min 1400   # download ladder replays -> data/raw/
-uv run python -m sb.parser                                   # protocol logs -> data/rows.jsonl
-uv run python scripts/train_v.py                             # V(s) win predictor -> models/v_model.txt
-uv run python scripts/train_pi.py                            # flat pi baseline (legacy)
-uv run python scripts/train_pi2.py                           # 2-stage pi -> models/pi2_*.txt
+uv run python -m sb.harvest --limit 4000 --rating-min 1400   # ladder replays -> data/raw/
+uv run python -m sb.parser                                   # -> data/rows_v2.jsonl (full-fidelity states)
+uv run python -m sb.parser_doubles                           # -> data/rows_v2_doubles.jsonl
+uv run python scripts/train_v_v2.py                          # V(s) over the full state -> models/v2_model.txt
+uv run python scripts/train_pi2.py                           # 2-stage policy prior -> data/pi2_*
+uv run python scripts/gauntlet.py --games 60                 # plays its past selves + LEARNS from it
 ```
+
+It learns from every game it plays: finished battles are dumped to
+`data/learned_games/`, folded into `rows_personal.jsonl`, and
+`models/v2_model.txt` rebuilds on public+personal rows between games
+(`sb/learn.py`). See ARCHITECTURE.md for the whole loop.
 
 Splits are by game id, never by row (rows from one game correlate).
 LightGBM is capped at 4 threads by default because uncapped training

@@ -31,7 +31,7 @@ def mon_features_d(m: dict | None) -> list[float]:
     sp = F.SPECIES.get(F.resolve_species(m["species"]))
     if sp and "types" not in sp and sp.get("baseSpecies"):
         sp = F.SPECIES.get(F.to_id(sp["baseSpecies"]), sp)
-    if sp and "types" in sp:
+    if sp and "types" in sp and "baseStats" in sp:
         t1 = F.TYPES.index(sp["types"][0]) if sp["types"][0] in F.TYPES else len(F.TYPES) - 1
         v += one_hot(t1, len(F.TYPES))
         if len(sp["types"]) > 1 and sp["types"][1] in F.TYPES:

@@ -20,6 +20,7 @@ import poke_env.ps_client.ps_client as psc  # noqa: E402
 
 from sb.agent import VsAgent  # noqa: E402
 from sb.agent_doubles import VsAgentDoubles  # noqa: E402
+from sb.learn import dump_battle, learn_new_games  # noqa: E402
 
 LOCAL = ServerConfiguration(
     "ws://localhost:8000/showdown/websocket",
@@ -61,6 +62,7 @@ class UniversalAgent(Player):
             account_configuration=AccountConfiguration("unused_s", "unused"),
             server_configuration=LOCAL,
             log_path=str(ROOT / "data" / "human-games.log"),
+            brain={"model": "v2_model.txt", "featurizer": "v2", "pi2": True},
         )
         self._doubles = VsAgentDoubles(
             account_configuration=AccountConfiguration("unused_d", "unused"),
@@ -70,10 +72,14 @@ class UniversalAgent(Player):
         )
 
     async def _handle_challenge_request(self, split_message):
-        """poke-env drops challenges whose format != self._format; a universal
-        listener must accept both singles and doubles."""
+        """poke-env drops incoming challenges whose format != self._format
+        (player.py:428) and _create_battle repeats the check at battle init
+        (player.py:192). A universal listener adopts the challenge's format
+        so both gates pass for singles AND doubles."""
         challenger = split_message[2].strip()
         if challenger != self.username:
+            if len(split_message) >= 6:
+                self._format = split_message[5]
             await self._challenge_queue.put(challenger)
 
     def choose_move(self, battle):
@@ -105,9 +111,17 @@ async def main():
             if tag in seen:
                 continue
             seen.add(tag)
+            dump_battle(b)  # every game becomes training data
             result = "WIN" if b.won else "LOSS" if b.lost else "TIE"
             kind = "doubles" if isinstance(b, DoubleBattle) else "singles"
             print(f"{tag} [{kind}]: {result} (turns: {b.turn})", flush=True)
+        # fold finished games into the personal corpus + rebuild the model
+        try:
+            n = await asyncio.get_event_loop().run_in_executor(None, learn_new_games)
+            if n:
+                print(f"  learned from {n} games", flush=True)
+        except Exception as e:
+            print(f"  learn failed (non-fatal): {e!r}", flush=True)
         await asyncio.sleep(2)
 
 
