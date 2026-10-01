@@ -110,10 +110,17 @@ async def main():
         print(f"game {i}/{args.games}: {winner}  ({wins['current']}-{wins['classic']}-{wins['tie']})",
               flush=True)
         if i % args.learn_every == 0:
-            n = await asyncio.get_event_loop().run_in_executor(None, learn_new_games)
-            print(f"  learned from {n} new games", flush=True)
+            try:
+                n = await asyncio.get_event_loop().run_in_executor(None, learn_new_games)
+                print(f"  learned from {n} new games", flush=True)
+            except Exception as e:
+                print(f"  learn failed (non-fatal): {e!r}", flush=True)
         await asyncio.sleep(2)
-    n = await asyncio.get_event_loop().run_in_executor(None, learn_new_games)
+    n = 0
+    try:
+        n = await asyncio.get_event_loop().run_in_executor(None, learn_new_games)
+    except Exception as e:
+        print(f"final learn failed: {e!r}", flush=True)
     print(f"final learn: {n} games; score {wins}", flush=True)
 
 

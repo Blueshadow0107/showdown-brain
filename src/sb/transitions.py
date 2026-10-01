@@ -98,10 +98,13 @@ def boost_mult(stage: int) -> float:
 
 
 def estimate_stats(species_id: str, level: int, evs: dict | None = None) -> dict:
+    """HP + five stats; EVs default to randbats-ish 85 flat unless given.
+    Stats-less forme entries resolve to their base; anything still unknown
+    gets a neutral 80-line rather than an exception."""
     _ensure()
-    """HP + five stats; EVs default to randbats-ish 85 flat unless given."""
     sp = SPECIES.get(resolve_species(species_id), {})
-    bs = sp["baseStats"]
+    bs = sp.get("baseStats") or {"hp": 80, "atk": 80, "def": 80,
+                                 "spa": 80, "spd": 80, "spe": 80}
     evs = evs or {}
     out = {}
     for st in ["hp", "atk", "def", "spa", "spd", "spe"]:
