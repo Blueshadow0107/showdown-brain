@@ -120,7 +120,7 @@ class VsAgentDoubles(Player):
                 continue
             pool = self._foe_pool(foe)
             weights, p_move = self._foe_pi(foe, state, pool)
-            exp_total += p_move * sum(w * T.damage(foe, me, om, s2)
+            exp_total += p_move * sum(w * T.damage(foe, me, om, s2, defender_screens=s2["my"].get("screens"))
                                       for om, w in weights.items())
         me["hp"] = max(0.0, me["hp"] - exp_total)
         if me["hp"] == 0:
@@ -192,7 +192,7 @@ class VsAgentDoubles(Player):
                 # spread: 0.75x to each foe active; allAdjacent also clips the ally
                 for fi in foes_alive:
                     foe = foes[fi]
-                    d_spread = T.damage(me, foe, move_id, s2) * 0.75
+                    d_spread = T.damage(me, foe, move_id, s2, defender_screens=s2["foe"].get("screens")) * 0.75
                     d += d_spread
                     foe["hp"] = max(0.0, foe["hp"] - d_spread)
                     self._faint_foe(s2, foe)
@@ -207,7 +207,7 @@ class VsAgentDoubles(Player):
                 target_idx, target = None, None
             elif target is not None:
                 # single target: aim at the foe active taking max damage
-                dmg = {fi: T.damage(me, foes[fi], move_id, s2) for fi in foes_alive}
+                dmg = {fi: T.damage(me, foes[fi], move_id, s2, defender_screens=s2["foe"].get("screens")) for fi in foes_alive}
                 target_idx = max(dmg, key=dmg.get)
                 target = foes[target_idx]
                 d = dmg[target_idx]

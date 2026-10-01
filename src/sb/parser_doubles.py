@@ -18,6 +18,7 @@ slot decision, NOT per joint pair):
 
 STATE DICT (keys identical to singles wherever semantics match):
     weather, terrain, trick_room   same as singles
+    turn                           turn number the snapshot belongs to (v2)
     my / foe                       per side (acting player's perspective):
         active    LIST of 2 mon dicts, slot order [a, b]; None if the slot is
                   empty or its mon fainted and has not been replaced.
@@ -25,6 +26,10 @@ STATE DICT (keys identical to singles wherever semantics match):
                   ABSOLUTE protocol position ("p1a".."p2b"), so rows from
                   either perspective stay cross-referable.
         fainted, remaining, bench_known, hazards, screens   same as singles
+                  (screens values are TURN COUNTS, ticking down per turn — v2)
+        tera_used, last_action   same as singles v2
+        team      v2: mon_public_v2 of EVERY known mon (insertion order,
+                  fainted included, active flagged via "pos")
 
 TURN STRUCTURE IN THE LOG (verified against fixtures):
     |turn|N
@@ -83,7 +88,7 @@ from sb.parser import Battle, Mon, parse_hp, strip_prefix, to_id
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 RAW = ROOT / "data" / "raw"
-OUT = ROOT / "data" / "rows_doubles.jsonl"
+OUT = ROOT / "data" / "rows_v2_doubles.jsonl"
 
 POS_RE = re.compile(r"^(p[12])([ab]?)$")
 
@@ -109,7 +114,9 @@ class DSide:
     mons: dict = field(default_factory=dict)  # nick -> Mon
     switches: int = 0                   # voluntary switches (momentum feature)
     hazards: dict = field(default_factory=dict)
-    screens: dict = field(default_factory=dict)
+    screens: dict = field(default_factory=dict)   # screen -> turns remaining (v2)
+    tera_used: bool = False             # v2: side-wide, endgame-relevant
+    last_action: str | None = None      # v2: previous decision ("move:x"/"switch:y")
 
     def mon(self, nick) -> Mon:
         return self.mons.setdefault(nick, Mon())
@@ -162,6 +169,31 @@ class DoublesBattle(Battle):
         }
         return d
 
+    def mon_public_v2(self, m: Mon, pos: str | None, active: bool) -> dict:
+        """Full-fidelity mon, doubles flavour: mon_public + v2 knowledge /
+        usage / cadence fields. `pos` is the absolute slot for actives, None
+        for bench mons; bench mons drop "volatiles" (active-only anyway)."""
+        d = self.mon_public(m, pos)
+        d.update({
+            "fainted": m.fainted,
+            "item_known": m.item_known,
+            "ability_known": m.ability_known,
+            "pp_used": dict(m.pp_used),
+            "last_move": m.last_move,
+            "consecutive": m.consecutive,
+            "times_entered": m.times_entered,
+        })
+        if not active:
+            d.pop("volatiles", None)
+        return d
+
+    def mon_pos(self, s: DSide, nick: str):
+        """Absolute pos tag of the slot `nick` currently occupies, else None."""
+        for sl in ("a", "b"):
+            if s.active.get(sl) == nick:
+                return f"{s.pid}{sl}"
+        return None
+
     def side_public(self, s: DSide) -> dict:
         act = []
         for sl in ("a", "b"):
@@ -181,6 +213,12 @@ class DoublesBattle(Battle):
             "switches": s.switches,
             "hazards": dict(s.hazards),
             "screens": dict(s.screens),
+            # ---- state v2 ----
+            "tera_used": s.tera_used,
+            "last_action": s.last_action,
+            "team": [self.mon_public_v2(m, self.mon_pos(s, n),
+                                        self.mon_pos(s, n) is not None)
+                     for n, m in s.mons.items()],
         }
 
     def emit(self, actor_side: str, slot: str, action_kind: str, action_id: str):
@@ -190,6 +228,7 @@ class DoublesBattle(Battle):
         me = snap_sides[actor_side]
         foe = snap_sides[flip(actor_side)]
         state = {
+            "turn": self.turn,
             "weather": weather,
             "terrain": terrain,
             "trick_room": trick_room,
@@ -208,6 +247,9 @@ class DoublesBattle(Battle):
             "state": state,
             "state_pre": state,
         })
+        # v2: record the action AFTER the row is built — rows of this turn all
+        # carry the PREVIOUS turn's last action (the snapshot froze it)
+        self.sides[actor_side].last_action = f"{action_kind}:{action_id}"
 
     def finish(self):
         for r in self.rows:
@@ -220,6 +262,13 @@ class DoublesBattle(Battle):
     # ---------- turn scaffolding ----------
     def h_turn(self, parts):
         self.turn = int(parts[2])
+        # screens tick down at turn start, before the snapshot (mirror of
+        # Battle.h_turn) so this turn's rows carry the post-decrement counts
+        for side in self.sides.values():
+            for sc in list(side.screens):
+                side.screens[sc] -= 1
+                if side.screens[sc] <= 0:
+                    del side.screens[sc]
         self.snap = (copy.deepcopy(self.sides), self.weather, self.terrain,
                      self.trick_room)
         # replacement switches chosen after the previous upkeep belong to this
@@ -250,11 +299,17 @@ class DoublesBattle(Battle):
         if mon.species == "":
             mon.species = to_id(nick)
         mon.moves.add(to_id(mv))
+        # v2: usage tracking — the per-turn snapshot was taken at |turn|, so
+        # tracking updates here can never leak into this turn's rows
+        m_id = to_id(mv)
+        mon.pp_used[m_id] = mon.pp_used.get(m_id, 0) + 1
+        mon.consecutive = mon.consecutive + 1 if mon.last_move == m_id else 0
+        mon.last_move = m_id
         mon.volatiles.discard("mustrecharge")
         mon.volatiles.discard("glaiverush")
         if self.snap is not None and sl not in self.emitted[s]:
             self.emitted[s].add(sl)
-            self.emit(s, sl, "move", to_id(mv))
+            self.emit(s, sl, "move", m_id)
 
     def h_switch(self, parts, forced=False):
         pos, details = parts[2], parts[3]
@@ -266,9 +321,12 @@ class DoublesBattle(Battle):
         side = self.sides[s]
         species = to_id(details.split(",")[0])
         old = side.active.get(sl)
+        if old and old in side.mons and old != nick:
+            self._apply_exit_effects(side.mons[old])
         if old and old in side.mons:
             side.mons[old].reset_on_switch()
         mon = side.mon(nick)
+        mon.times_entered += 1  # any switch-in is an entry (drag included)
         mon.species = species
         mon.volatiles = set()
         mon.fainted = False  # fresh switch-in; also covers Revival Blessing revives
@@ -330,9 +388,17 @@ class DoublesBattle(Battle):
             mon.moves |= m_old.moves
             mon.tera = m_old.tera
             mon.fainted = m_old.fainted
+            # v2 tracking belongs to the mon, not the disguise — carry it over
+            mon.item_known = m_old.item_known
+            mon.ability_known = m_old.ability_known
+            mon.pp_used = dict(m_old.pp_used)
+            mon.last_move = m_old.last_move
+            mon.consecutive = m_old.consecutive
+            mon.times_entered = m_old.times_entered
         mon.species = to_id(details.split(",")[0])
         side.active[sl] = nick
-        # h_replace: an illusion reveal, not a decision — no switch counted
+        # h_replace: an illusion reveal, not a decision — no switch counted,
+        # no entry/exit effects (the same mon was on the field all along)
 
     # ---------- doubles-specific mon events ----------
     def h_singleturn(self, parts):

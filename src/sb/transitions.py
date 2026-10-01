@@ -175,8 +175,13 @@ def terrain_mult(move_type: str, terrain, grounded: bool = True) -> float:
 
 
 def damage(attacker: dict, defender: dict, move_id: str, state: dict,
-           att_stats: dict | None = None, def_stats: dict | None = None) -> float:
-    """Expected damage fraction of defender's max HP (0 if status/no power)."""
+           att_stats: dict | None = None, def_stats: dict | None = None,
+           defender_screens: dict | None = None) -> float:
+    """Expected damage fraction of defender's max HP (0 if status/no power).
+    defender_screens: the DEFENDER's side screens (turns remaining; presence
+    halves the matching category — reflect/lightscreen/auroraveil). Singles
+    0.5x, doubles 2/3x (passed via len(state defenders) heuristic: caller sets
+    'doubles': True in state, or scaling defaults to singles)."""
     _ensure()
     entry = MOVES.get(move_id)
     if not entry or entry["category"] == "status" or not entry.get("power"):
@@ -199,12 +204,27 @@ def damage(attacker: dict, defender: dict, move_id: str, state: dict,
     eff = effectiveness(entry["type"], defender)
     mult = (stab * eff * weather_mult(entry["type"], state.get("weather"))
             * terrain_mult(entry["type"], state.get("terrain"))
+            * screen_mult(cat, defender_screens,
+                          doubles=isinstance(state.get("my", {}).get("active"), list))
             * 0.925)
     acc = entry.get("accuracy")
     if acc:
         mult *= acc / 100
     dmg = base * mult
     return min(1.5, dmg / max(1, def_stats["hp"]))
+
+
+def screen_mult(category: str, screens: dict | None, doubles: bool = False) -> float:
+    """Reflect halves physical, Light Screen halves special, Aurora Veil both.
+    Caller passes turns-remaining dicts; presence (turns > 0) is enough.
+    Singles 0.5x, doubles 2/3x (gen 9)."""
+    if not screens:
+        return 1.0
+    up = {k for k, v in screens.items() if (v or 0) > 0}
+    if "auroraveil" in up or ("reflect" in up and category == "physical") \
+            or ("lightscreen" in up and category == "special"):
+        return 2 / 3 if doubles else 0.5
+    return 1.0
 
 
 def apply_boosts(mon: dict, boosts: dict, sign: int = 1):

@@ -80,7 +80,8 @@ class VsAgent(Player):
         if not me or not foe or foe["hp"] <= 0 or me["hp"] <= 0:
             return
         ctx = self._opp_ctx(state)
-        exp = sum(w * T.damage(foe, me, om, s2) for om, w in ctx["weights"].items())
+        exp = sum(w * T.damage(foe, me, om, s2, defender_screens=s2["my"].get("screens"))
+                    for om, w in ctx["weights"].items())
         me["hp"] = max(0.0, me["hp"] - ctx["p_move"] * exp)
         if me["hp"] == 0:
             s2["my"]["fainted"] = min(6, s2["my"]["fainted"] + 1)
@@ -106,7 +107,7 @@ class VsAgent(Player):
                     base -= 0.06
                 return base
         if entry.get("category") != "status":
-            d = T.damage(me, foe, move_id, s2)
+            d = T.damage(me, foe, move_id, s2, defender_screens=s2["foe"].get("screens"))
             foe["hp"] = max(0.0, foe["hp"] - d)
             if foe["hp"] == 0:
                 s2["foe"]["fainted"] = min(6, s2["foe"]["fainted"] + 1)
