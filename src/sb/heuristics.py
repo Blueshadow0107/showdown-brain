@@ -22,6 +22,12 @@ class Heuristics:
     tera_margin: float = 0.03
     # unmodelable move effects fall back with this penalty
     unmodelled_penalty: float = 0.02
+    # sunk-boost debit: each positive stage on the outgoing mon taxes a
+    # switch — the setup turns it spent die with the boost reset
+    sunk_boost_debit: float = 0.015
+    # setup-no-gain tax: a self-boost that flips no KO clock (vs multiscale
+    # walls) costs tax * (1 + stages invested) — repeated setup escalates
+    setup_no_gain_tax: float = 0.03
     # candidate cap per slot in doubles (decision budget)
     doubles_max_candidates: int = 8
 

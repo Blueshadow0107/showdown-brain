@@ -5,6 +5,7 @@ Unmodelable move effects fall back with a small penalty (the 'prior' hook:
 swap in pi's argmax later).
 """
 import json
+import math
 import pathlib
 
 import lightgbm as lgb
@@ -111,6 +112,32 @@ class VsAgent(Player):
             s2["my"]["fainted"] = min(6, s2["my"]["fainted"] + 1)
             s2["my"]["remaining"] = max(0, s2["my"]["remaining"] - 1)
 
+    def _setup_no_gain(self, state: dict, move_id: str, boosts: dict) -> float:
+        """Tax a self-boost that flips no KO clock (cm vs multiscale walls):
+        if every other attacking move needs the same number of hits before
+        and after the boost, the turn is wasted and repeats escalate."""
+        me, foe = state["my"]["active"], state["foe"]["active"]
+        if not me or not foe or foe["hp"] <= 0:
+            return 0.0
+        others = [m for m in me.get("moves", [])
+                  if m != move_id and T.MOVES.get(m, {}).get("power")
+                  and T.MOVES.get(m, {}).get("category") != "status"]
+        if not others:
+            return 0.0
+
+        def clock(m: str, att: dict, dfn: dict, st: dict) -> int:
+            dmg = T.damage(att, dfn, m, st, defender_screens=st["foe"].get("screens"))
+            return math.ceil(dfn["hp"] / dmg) if dmg > 0 else 99
+
+        boosted = T.clone(state)
+        T.apply_boosts(boosted["my"]["active"], boosts)
+        b_me, b_foe = boosted["my"]["active"], boosted["foe"]["active"]
+        if any(clock(m, b_me, b_foe, boosted) < clock(m, me, foe, state)
+               for m in others):
+            return 0.0
+        invested = sum(v for v in me.get("boosts", {}).values() if v > 0)
+        return H.setup_no_gain_tax * (1 + invested)
+
     def _ev_move(self, state: dict, move_id: str, tera_type: str | None = None) -> float:
         s2 = T.clone(state)
         entry = T.MOVES.get(move_id, {})
@@ -152,20 +179,25 @@ class VsAgent(Player):
         died = not me or me["hp"] == 0
         if state["my"]["remaining"] <= 1 and died and d == 0 and not ko:
             base -= H.urgency_penalty
+        if entry.get("category") == "status" and entry.get("boosts"):
+            base -= self._setup_no_gain(state, move_id, entry["boosts"])
         return base
 
     def _ev_switch(self, state: dict, bench_mon) -> float:
         s2 = T.clone(state)
         incoming = _mon_public(bench_mon)
         T.apply_entry_hazards(incoming, s2["my"].get("hazards", {}))
+        stages = sum(v for v in (state["my"]["active"] or {}).get("boosts", {}).values()
+                     if v > 0)
+        debit = H.sunk_boost_debit * stages
         if incoming["hp"] == 0:  # hazard death on entry (rocks vs a chipped mon)
             s2["my"]["fainted"] = min(6, s2["my"]["fainted"] + 1)
             s2["my"]["remaining"] = max(0, s2["my"]["remaining"] - 1)
             s2["my"]["active"] = incoming
-            return self._v(s2)
+            return self._v(s2) - debit
         s2["my"]["active"] = incoming
         self._retaliate(s2, state)
-        return self._v(s2)
+        return self._v(s2) - debit
 
     def choose_move(self, battle):
         self._ensure_attrs()
