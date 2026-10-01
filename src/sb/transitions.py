@@ -234,8 +234,16 @@ def apply_move_effects(state: dict, actor_side: str, move_id: str) -> bool:
         me["hp"] = min(1.0, me["hp"] + entry["heal"][0] / entry["heal"][1])
         handled = True
     if entry.get("status") and them:
-        if not them.get("status"):
-            them["status"] = entry["status"]
+        # a status that can't land (target already statused, type-immune to the
+        # move, or para-vs-electric) is a WASTED TURN — report unmodelled so
+        # the caller prices it as the failure it is (twave on a paralyzed mon)
+        status = entry["status"]
+        type_immune = effectiveness(entry["type"], them) == 0
+        status_immune = (status == "par" and "Electric" in defender_types(them)) \
+            or (status == "brn" and ("Fire" in defender_types(them)))
+        if them.get("status") or type_immune or status_immune:
+            return False
+        them["status"] = status
         handled = True
     if entry.get("sideCondition"):
         side = state["foe" if actor_side == "my" else "my"]

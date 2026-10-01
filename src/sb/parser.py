@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 RAW = ROOT / "data" / "raw"
-OUT = ROOT / "data" / "rows.jsonl"
+OUT = ROOT / "data" / "rows_v2.jsonl"
 
 STATUSES = {"brn", "par", "psn", "tox", "slp", "frz"}
 BOOST_STATS = ["atk", "def", "spa", "spd", "spe", "accuracy", "evasion"]
@@ -54,10 +54,24 @@ class Mon:
     moves: set = field(default_factory=set)
     tera: str | None = None
     fainted: bool = False
+    # --- state v2 additions (full-fidelity capture, no training yet) ---
+    item_known: bool = False        # False = unrevealed (foe disguise)
+    ability_known: bool = False
+    pp_used: dict = field(default_factory=dict)      # move_id -> times used
+    last_move: str | None = None    # most recent move used (choice-lock/stall reads)
+    consecutive: int = 0            # same-move streak
+    times_entered: int = 0          # switch-ins (regen cadence, wear)
 
     def reset_on_switch(self):
         self.boosts = {s: 0 for s in BOOST_STATS}
         self.volatiles = set()
+
+
+# screens are timed side conditions, tracked separately from stackable hazards
+SCREEN_TURNS = {"reflect": 5, "lightscreen": 5, "auroraveil": 5, "tailwind": 4}
+# switch-out effects the server applies silently; the parser mirrors them
+EXIT_HEAL_ABILITIES = {"regenerator": 1 / 3}
+EXIT_CURE_ABILITIES = {"naturalcure"}
 
 
 @dataclass
@@ -69,7 +83,9 @@ class Side:
     fainted: int = 0
     switches: int = 0                   # voluntary switches (momentum feature)
     hazards: dict = field(default_factory=dict)   # cond -> count (spikes) or 1
-    screens: dict = field(default_factory=dict)   # cond -> 1
+    screens: dict = field(default_factory=dict)   # screen -> turns remaining
+    tera_used: bool = False             # v2: side-wide, endgame-relevant
+    last_action: str | None = None      # v2: previous decision ("move:x"/"switch:y")
 
     def mon(self, nick) -> Mon:
         return self.mons.setdefault(nick, Mon())
@@ -106,6 +122,24 @@ class Battle:
             "tera": m.tera,
         }
 
+    def mon_public_v2(self, m: Mon, active: bool) -> dict:
+        """Full-fidelity mon: v1 fields plus knowledge flags, usage, cadence.
+        `active` gets everything; bench mons get the same struct (the hp /
+        boosts / status of the WHOLE team is the point of v2)."""
+        d = self.mon_public(m)
+        d.update({
+            "fainted": m.fainted,
+            "item_known": m.item_known,
+            "ability_known": m.ability_known,
+            "pp_used": dict(m.pp_used),
+            "last_move": m.last_move,
+            "consecutive": m.consecutive,
+            "times_entered": m.times_entered,
+        })
+        if not active:
+            d.pop("volatiles", None)  # volatiles are active-only anyway
+        return d
+
     def side_public(self, s: Side) -> dict:
         bench = [n for n, m in s.mons.items() if n != s.active and not m.fainted]
         return {
@@ -116,6 +150,11 @@ class Battle:
             "switches": s.switches,
             "hazards": dict(s.hazards),
             "screens": dict(s.screens),
+            # ---- state v2 ----
+            "tera_used": s.tera_used,
+            "last_action": s.last_action,
+            "team": [self.mon_public_v2(m, n == s.active)
+                     for n, m in s.mons.items()],
         }
 
     def _row_state(self, actor_side: str) -> dict:
@@ -123,6 +162,7 @@ class Battle:
         foe_side = "p2" if actor_side == "p1" else "p1"
         foe = self.sides[foe_side]
         return {
+            "turn": self.turn,
             "weather": self.weather,
             "terrain": self.terrain,
             "trick_room": self.trick_room,
@@ -131,6 +171,8 @@ class Battle:
         }
 
     def emit(self, actor_side: str, action_kind: str, action_id: str, pre: dict | None = None):
+        me = self.sides[actor_side]
+        prev = me.last_action
         row = {
             "game": self.id,
             "turn": self.turn,
@@ -141,6 +183,7 @@ class Battle:
         }
         if pre is not None:
             row["state_pre"] = pre
+        me.last_action = f"{action_kind}:{action_id}"
         self.rows.append(row)
 
     def finish(self):
@@ -163,9 +206,12 @@ class Battle:
         if mon.fainted:  # revived (Revival Blessing) — no longer fainted
             mon.fainted = False
             side.fainted = max(0, side.fainted - 1)
+        if side.active and side.active in side.mons and side.active != nick:
+            self._apply_exit_effects(side.mons[side.active])
         if side.active and side.active in side.mons:
             side.mons[side.active].reset_on_switch()
         side.active = nick
+        mon.times_entered += 1
         mon.species = species
         mon.volatiles = set()
         hp_t = parse_hp(hp)
@@ -178,6 +224,17 @@ class Battle:
             side.switches += 1
             self.emit(actor, "switch", species, pre=pre)
 
+    def _apply_exit_effects(self, mon: Mon):
+        """Switch-out effects the sim applies silently — mirror them so bench
+        HP/status in the state stays truthful (regenerator heals 1/3,
+        natural cure clears status). Only fires when the ability is KNOWN."""
+        if mon.fainted or mon.hp <= 0:
+            return
+        if mon.ability_known and mon.ability in EXIT_HEAL_ABILITIES:
+            mon.hp = min(1.0, mon.hp + EXIT_HEAL_ABILITIES[mon.ability])
+        if mon.ability_known and mon.ability in EXIT_CURE_ABILITIES:
+            mon.status = None
+
     def h_move(self, parts):
         pos, mv = parts[2], parts[3]
         s = side_of(pos)
@@ -186,13 +243,18 @@ class Battle:
         mon = side.mon(nick)
         if mon.species == "":
             mon.species = to_id(nick)
+        m_id = to_id(mv)
         pre = None
         if not self.emitted[s]:
             pre = self._row_state(s)
-        mon.moves.add(to_id(mv))
+        # v2: usage tracking (after the pre-decision snapshot)
+        mon.moves.add(m_id)
+        mon.pp_used[m_id] = mon.pp_used.get(m_id, 0) + 1
+        mon.consecutive = mon.consecutive + 1 if mon.last_move == m_id else 0
+        mon.last_move = m_id
         if pre is not None:
             self.emitted[s] = True
-            self.emit(s, "move", to_id(mv), pre=pre)
+            self.emit(s, "move", m_id, pre=pre)
 
     def h_damage(self, parts):
         pos, hp = parts[2], parts[3]
@@ -267,28 +329,42 @@ class Battle:
     def h_sidestart(self, parts):
         side = self.sides["p1" if parts[2].startswith("p1") else "p2"]
         cond = strip_prefix(parts[3])
-        side.hazards[cond] = side.hazards.get(cond, 0) + 1
+        if cond in SCREEN_TURNS:
+            side.screens[cond] = SCREEN_TURNS[cond]  # v2: timed, decremented per turn
+        else:
+            side.hazards[cond] = side.hazards.get(cond, 0) + 1
 
     def h_sideend(self, parts):
         side = self.sides["p1" if parts[2].startswith("p1") else "p2"]
         cond = strip_prefix(parts[3])
-        side.hazards.pop(cond, None)
+        if cond in SCREEN_TURNS:
+            side.screens.pop(cond, None)
+        else:
+            side.hazards.pop(cond, None)
 
     def h_ability(self, parts):
         pos, ab = parts[2], to_id(parts[3])
-        self.sides[side_of(pos)].mon(pos.split(": ", 1)[1]).ability = ab
+        mon = self.sides[side_of(pos)].mon(pos.split(": ", 1)[1])
+        mon.ability = ab
+        mon.ability_known = True
 
     def h_item(self, parts):
         pos, it = parts[2], to_id(parts[3])
-        self.sides[side_of(pos)].mon(pos.split(": ", 1)[1]).item = it
+        mon = self.sides[side_of(pos)].mon(pos.split(": ", 1)[1])
+        mon.item = it
+        mon.item_known = True
 
     def h_enditem(self, parts):
         pos = parts[2]
-        self.sides[side_of(pos)].mon(pos.split(": ", 1)[1]).item = None
+        mon = self.sides[side_of(pos)].mon(pos.split(": ", 1)[1])
+        mon.item = None
+        mon.item_known = True  # consumed/removed = revealed
 
     def h_terastallize(self, parts):
         pos, t = parts[2], parts[3].strip().title()
-        self.sides[side_of(pos)].mon(pos.split(": ", 1)[1]).tera = t
+        side = self.sides[side_of(pos)]
+        side.mon(pos.split(": ", 1)[1]).tera = t
+        side.tera_used = True
 
     def h_faint(self, parts):
         pos = parts[2]
@@ -312,6 +388,11 @@ class Battle:
     def h_turn(self, parts):
         self.turn = int(parts[2])
         self.emitted = {"p1": False, "p2": False}
+        for side in self.sides.values():
+            for sc in list(side.screens):
+                side.screens[sc] -= 1
+                if side.screens[sc] <= 0:
+                    del side.screens[sc]
 
     def h_win(self, parts):
         name = parts[2]

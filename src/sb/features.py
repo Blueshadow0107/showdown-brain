@@ -73,6 +73,8 @@ def resolve_species(species_id: str) -> str:
     """Follow baseSpecies chains so cosmetic/inherited formes (florgesblue,
     burmysandy, deerlingwinter, ...) map to the entry that actually carries
     baseStats. Absent ids are returned unchanged (lookups then default)."""
+    if SPECIES is None:
+        _load()
     sid = species_id
     for _ in range(3):
         sp = SPECIES.get(sid) if SPECIES else None

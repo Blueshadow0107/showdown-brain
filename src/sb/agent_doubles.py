@@ -153,8 +153,13 @@ class VsAgentDoubles(Player):
             me["hp"] = min(1.0, me["hp"] + entry["heal"][0] / entry["heal"][1])
             handled = True
         if entry.get("status") and target:
-            if not target.get("status"):
-                target["status"] = entry["status"]
+            status = entry["status"]
+            type_immune = T.effectiveness(entry["type"], target) == 0
+            status_immune = (status == "par" and "Electric" in T.defender_types(target)) \
+                or (status == "brn" and ("Fire" in T.defender_types(target)))
+            if target.get("status") or type_immune or status_immune:
+                return False  # wasted turn: no effect lands
+            target["status"] = status
             handled = True
         if entry.get("sideCondition"):
             side = s2["foe"]
