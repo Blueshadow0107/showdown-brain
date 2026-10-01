@@ -14,6 +14,7 @@ doubles V model (features_doubles). Differences from singles, by design (v1):
 """
 import copy
 import json
+import math
 import pathlib
 import traceback
 
@@ -56,6 +57,16 @@ class VsAgentDoubles(Player):
         self._foe_pi_cache = {}  # per-decision cache: foe pos -> (weights, p_move)
         self.log_path = log_path
         self._log = open(log_path, "a") if log_path else None
+
+    def _ensure_attrs(self):
+        """Same daemon-safety guard as VsAgent: poke-env can invoke choose_move
+        on an instance whose __init__ is still running (a stale pending
+        challenge lands the instant login completes, mid model-load)."""
+        for name, default in (("pi2d", None), ("_log", None), ("_pools", None),
+                              ("_foe_pi_cache", None), ("_sw", None),
+                              ("_battle_tag", None), ("_last_foe_pair", None)):
+            if not hasattr(self, name):
+                setattr(self, name, default)
 
     def _v(self, state: dict, slot: str) -> float:
         x = np.array([FD.state_features_d(state, slot)], dtype="float32")
@@ -176,6 +187,45 @@ class VsAgentDoubles(Player):
             handled = True
         return handled
 
+    def _setup_no_gain_d(self, state: dict, slot_i: int, move_id: str,
+                         boosts: dict, foes_alive: list[int]) -> float:
+        """Doubles port of VsAgent._setup_no_gain: tax a slot's self-boost
+        that flips no KO clock for its other attacking moves. Clocks use the
+        damage eval's targeting (spread -> each foe alive, else the max-damage
+        foe), compared now vs boosted on the same targets."""
+        me = state["my"]["active"][slot_i]
+        foes = state["foe"]["active"]
+        if not me or not foes_alive:
+            return 0.0
+        others = [m for m in me.get("moves", [])
+                  if m != move_id and T.MOVES.get(m, {}).get("power")
+                  and T.MOVES.get(m, {}).get("category") != "status"]
+        if not others:
+            return 0.0
+        screens = state["foe"].get("screens")
+        targets = {}
+        for m in others:
+            if T.MOVES[m].get("target") in ("allAdjacent", "allAdjacentFoes"):
+                targets[m] = list(foes_alive)  # spread clips every foe active
+            else:
+                targets[m] = [max(foes_alive, key=lambda fi: T.damage(me, foes[fi], m, state, defender_screens=screens))]
+
+        def clock(m: str, fi: int, att: dict, st: dict) -> int:
+            d = T.damage(att, foes[fi], m, st, defender_screens=st["foe"].get("screens"))
+            if T.MOVES[m].get("target") in ("allAdjacent", "allAdjacentFoes"):
+                d *= 0.75
+            return math.ceil(foes[fi]["hp"] / d) if d > 0 else 99
+
+        boosted = T.clone(state)
+        T.apply_boosts(boosted["my"]["active"][slot_i], boosts)
+        b_me = boosted["my"]["active"][slot_i]
+        for m in others:
+            for fi in targets[m]:
+                if clock(m, fi, b_me, boosted) < clock(m, fi, me, state):
+                    return 0.0
+        invested = sum(v for v in me.get("boosts", {}).values() if v > 0)
+        return H.setup_no_gain_tax * (1 + invested)
+
     def _ev_move_d(self, state: dict, slot_i: int, move_id: str,
                    foes_alive: list[int]) -> tuple:
         """EV of slot-i mon using move_id. Returns (ev, target_idx, dmg, ko, died)
@@ -228,18 +278,23 @@ class VsAgentDoubles(Player):
         # wasted turn — V's coarse features can't see it, so correct directly
         if state["my"]["remaining"] <= 1 and died and d == 0 and not ko:
             ev -= 0.06
+        if entry.get("category") == "status" and entry.get("boosts"):
+            ev -= self._setup_no_gain_d(state, slot_i, move_id, entry["boosts"], foes_alive)
         return ev, target_idx, d, ko, died
 
     def _ev_switch_d(self, state: dict, slot_i: int, bench_mon: dict,
                      slot_pos: str) -> float:
         s2 = T.clone(state)
         s2["my"]["active"][slot_i] = copy.deepcopy(bench_mon)
+        stages = sum(v for v in (state["my"]["active"][slot_i] or {}).get("boosts", {}).values()
+                     if v > 0)
         self._retaliate_d(s2, slot_i, state)
-        return self._v(s2, slot_pos)
+        return self._v(s2, slot_pos) - H.sunk_boost_debit * stages
 
     def choose_move(self, battle):
         if not isinstance(battle, DoubleBattle):
             return self.choose_random_move(battle)
+        self._ensure_attrs()
         # momentum counters: reset per battle; mine counted on switch orders,
         # foe's by changes to the pair of active species between decisions
         if getattr(self, "_battle_tag", None) != battle.battle_tag:
@@ -295,13 +350,25 @@ class VsAgentDoubles(Player):
                     if kind == "move":
                         ev, t_idx, d, _, _ = self._ev_move_d(state, i, payload.id, foes_alive)
                         dmg_by_name[name] = d
-                        order = self.create_order(
-                            payload,
-                            move_target=(battle.to_showdown_target(payload, None)
-                                         if t_idx is None else
-                                         battle.to_showdown_target(
-                                             payload,
-                                             battle.opponent_active_pokemon[t_idx])))
+                        t_class = T.MOVES.get(payload.id, {}).get("target")
+                        if t_class in ("adjacentAlly", "adjacentAllyOrSelf"):
+                            # choosable-target moves the server requires an
+                            # explicit target for (2 actives); to_showdown_target
+                            # can't express ally slots, so a bare order is
+                            # rejected and re-requested until the timer floods
+                            ally = battle.active_pokemon[1 - i]
+                            if ally is not None:
+                                move_target = (battle.POKEMON_2_POSITION if i == 0
+                                               else battle.POKEMON_1_POSITION)
+                            else:  # adjacentAllyOrSelf: self is always legal
+                                move_target = (battle.POKEMON_1_POSITION if i == 0
+                                               else battle.POKEMON_2_POSITION)
+                        elif t_idx is None:
+                            move_target = battle.to_showdown_target(payload, None)
+                        else:
+                            move_target = battle.to_showdown_target(
+                                payload, battle.opponent_active_pokemon[t_idx])
+                        order = self.create_order(payload, move_target=move_target)
                     else:
                         pub = _mon_public_d(payload, pos)
                         ev = self._ev_switch_d(state, i, pub, pos)

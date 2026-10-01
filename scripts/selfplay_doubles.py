@@ -78,8 +78,8 @@ async def main():
                                battle_format="gen9randomdoublesbattle",
                                start_timer_on_battle_start=True)
     print("both players up — waiting for logins, then challenging", flush=True)
-    await asyncio.gather(king.ps_client.logged_in.wait(),
-                         base.ps_client.logged_in.wait())
+    # no logged_in.wait() here: the Event lives in the ps_client loop, so
+    # awaiting it from this loop deadlocks — send/accept wait internally
     await asyncio.gather(
         base.send_challenges(to_id_str(bot_acc.username), 1),
         king.accept_challenges(to_id_str(base_acc.username), 1),
