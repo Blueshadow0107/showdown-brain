@@ -6,17 +6,20 @@ base + personal rows is one command — the listener triggers it between games.
 
     from sb.learn import dump_battle, learn_new_games
     dump_battle(battle)                 # after a battle finishes
-    learn_new_games()                   # parse -> append -> retrain V_v2
+    learn_new_games()                   # parse -> append -> retrain V(s)
 """
 import json
 import pathlib
 
-from sb import features, features_v2
+from sb import features, features_doubles, features_v2
 from sb.parser import parse_log
+from sb.parser_doubles import parse_log as parse_log_doubles
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 GAMES = ROOT / "data" / "learned_games"
 PERSONAL = ROOT / "data" / "rows_personal.jsonl"
+PERSONAL_D = ROOT / "data" / "rows_personal_doubles.jsonl"
+DOUBLES_BASE = ROOT / "data" / "rows_v2_doubles.jsonl"
 SEEN = ROOT / "data" / "learned_games" / "seen.json"
 
 
@@ -40,34 +43,50 @@ def _seen() -> set:
 
 
 def learn_new_games(retrain: bool = True, games_dir: pathlib.Path | None = None) -> int:
-    """Parse unlearned game logs -> append rows to the personal corpus ->
-    optionally retrain models/v2_model.txt on base+personal rows.
+    """Parse unlearned game logs -> append rows to the personal corpora ->
+    optionally retrain the affected V models on base+personal rows.
 
-    Retraining rebuilds from scratch (deterministic, ~40s for 200k rows) —
+    Retraining rebuilds from scratch (deterministic, ~40s per model) —
     incremental LightGBM updates drift; a rebuild keeps the morning honest.
+    Doubles logs (by room tag) route to the doubles parser/corpus, so each
+    format only ever trains on its own rows.
     Returns the number of new games folded in."""
     games_dir = games_dir or GAMES
     seen = _seen()
-    new_rows, new_games = [], []
+    new_rows, new_rows_d, new_games = [], [], []
     for path in sorted(games_dir.glob("*.log")):
         tag = path.stem
         if tag in seen:
             continue
-        rows = parse_log(path.read_text(errors="replace"), tag)
+        text = path.read_text(errors="replace")
+        if "doubles" in tag:
+            rows = parse_log_doubles(text, tag)
+            target = new_rows_d
+        else:
+            rows = parse_log(text, tag)
+            target = new_rows
         if not rows:  # unfinished or unparseable game
             continue
-        new_rows.extend(rows)
+        target.extend(rows)
         new_games.append(tag)
-    if not new_rows:
+    if not new_games:
         return 0
-    PERSONAL.parent.mkdir(parents=True, exist_ok=True)
-    with PERSONAL.open("a") as f:
-        for r in new_rows:
-            f.write(json.dumps(r) + "\n")
+    if new_rows:
+        PERSONAL.parent.mkdir(parents=True, exist_ok=True)
+        with PERSONAL.open("a") as f:
+            for r in new_rows:
+                f.write(json.dumps(r) + "\n")
+    if new_rows_d:
+        with PERSONAL_D.open("a") as f:
+            for r in new_rows_d:
+                f.write(json.dumps(r) + "\n")
     seen.update(new_games)
     json.dump(sorted(seen), open(SEEN, "w"))
     if retrain:
-        retrain_v2()
+        if new_rows:
+            retrain_v2()
+        if new_rows_d:
+            retrain_v_doubles()
     return len(new_games)
 
 
@@ -106,4 +125,40 @@ def retrain_v2() -> dict:
     model.save_model(str(tmp))
     tmp.replace(ROOT / "models" / "v2_model.txt")  # atomic: live listener never
     json.dump(metrics, open(ROOT / "models" / "v2_metrics.json", "w"), indent=1)
+    return metrics
+
+
+def retrain_v_doubles() -> dict:
+    """Rebuild the doubles V on the public doubles corpus + personal doubles
+    rows; eval split stays public-only (mirrors retrain_v2)."""
+    import lightgbm as lgb
+    import numpy as np
+    from sklearn.metrics import auc, roc_curve
+
+    base = [json.loads(l) for l in open(DOUBLES_BASE)]
+    pers = [json.loads(l) for l in open(PERSONAL_D)] if PERSONAL_D.exists() else []
+    rows = base + pers
+    X, y, g = features_doubles.build_matrix_d(rows)
+
+    base_games = np.unique([r["game"] for r in base])
+    rng = np.random.default_rng(7)
+    val_games = set(rng.choice(base_games, size=int(0.2 * len(base_games)),
+                               replace=False))
+    val_mask = np.array([gid in val_games for gid in g])
+
+    dtrain = lgb.Dataset(X[~val_mask], y[~val_mask])
+    dval = lgb.Dataset(X[val_mask], y[val_mask], reference=dtrain)
+    params = {"objective": "binary", "metric": ["binary_logloss", "auc"],
+              "learning_rate": 0.05, "num_leaves": 127, "min_data_in_leaf": 50,
+              "feature_fraction": 0.8, "num_threads": 4, "verbose": -1}
+    model = lgb.train(params, dtrain, num_boost_round=2000, valid_sets=[dval],
+                      callbacks=[lgb.early_stopping(100), lgb.log_evaluation(0)])
+    p = model.predict(X[val_mask])
+    fpr, tpr, _ = roc_curve(y[val_mask], p)
+    metrics = {"rows": int(len(rows)), "personal_rows": len(pers),
+               "auc": round(auc(fpr, tpr), 4), "best_iter": model.best_iteration}
+    tmp = ROOT / "models" / "v_model_doubles.txt.tmp"
+    model.save_model(str(tmp))
+    tmp.replace(ROOT / "models" / "v_model_doubles.txt")
+    json.dump(metrics, open(ROOT / "models" / "v_metrics_doubles.json", "w"), indent=1)
     return metrics
