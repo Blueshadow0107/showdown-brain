@@ -110,6 +110,7 @@ TEMPLATE = r"""<!doctype html>
     <div id="ghint">drag = pan · wheel = zoom · drag node = pin<br>hover = neighbourhood · click = decode</div>
     <div id="gpanel"></div>
   </div>
+  <div id="content"></div>
 </main>
 <script>
 const B = __DATA__;
@@ -172,7 +173,7 @@ function chartHtml(){
   return out + "</table>";
 }
 function renderMain(){
-  const m = document.getElementById("main");
+  const m = document.getElementById("content");
   if (cur === "species") m.innerHTML = decodeSpecies(sel);
   else if (cur === "moves") m.innerHTML = decodeMove(sel);
   else if (cur === "items") m.innerHTML = decodeTags("items", sel);
@@ -180,9 +181,7 @@ function renderMain(){
 }
 function renderList(){
   document.getElementById("gwrap").style.display = cur === "graph" ? "block" : "none";
-  document.getElementById("main").childNodes.forEach(n=>{
-    if (n.nodeType===1 && n.id!=="gwrap") n.remove();
-  });
+  document.getElementById("content").innerHTML = "";
   if (cur === "graph"){ Graph.enter(); return; }
   Graph.exit();
   const q = document.getElementById("q").value.toLowerCase();
@@ -193,14 +192,15 @@ function renderList(){
   else if (cur === "abilities") ids = B.abilities.ids;
   const list = document.getElementById("list");
   list.innerHTML = "";
+  const main = document.getElementById("content");
   if (cur === "chart"){
     const d = document.createElement("div"); d.innerHTML = chartHtml();
-    m.appendChild(d); return;
+    main.appendChild(d); return;
   }
   if (cur === "sets"){
     const d = document.createElement("div");
     d.innerHTML = `<h1>randbats sets</h1><div class="sub">pick any species in the species tab (sets are on its page)</div>`;
-    document.getElementById("main").appendChild(d); return;
+    main.appendChild(d); return;
   }
   const hit = [];
   for (let i=0;i<ids.length && hit.length<400;i++)
