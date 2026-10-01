@@ -59,7 +59,8 @@ def acc(kind: str) -> AccountConfiguration:
 async def main():
     king = VsAgent(account_configuration=acc("bot"), server_configuration=LOCAL,
                    start_timer_on_battle_start=True,
-                   log_path=str(ROOT / "data" / "selfplay.log"))
+                   log_path=str(ROOT / "data" / "selfplay.log"),
+                   brain={"model": "v2_model.txt", "featurizer": "v2", "pi2": True})
     base = SimpleHeuristicsPlayer(account_configuration=acc("baseline"),
                                   server_configuration=LOCAL,
                                   start_timer_on_battle_start=True)
