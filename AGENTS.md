@@ -1,6 +1,6 @@
 # AGENTS.md - showdown-brain
 
-Battle AI for Pokemon Showdown **gen 9 random singles**, learned from public ladder replays.
+Battle AI for Pokemon Showdown **gen 9 random battles (singles + doubles)**, learned from public ladder replays.
 
 ## Why random battles
 
@@ -8,20 +8,13 @@ Hidden information is constrained: every species rolls from the known pool in
 `~/pokemon-data/randbats-sets.json`. Unrevealed sets are enumerable — this is the
 project's core advantage over free-teambuild formats.
 
-## Architecture (milestones)
+## Status (2026-10; layout and data flow: ARCHITECTURE.md)
 
-- **M1 (done)**: harvester + protocol parser -> `(state, action, outcome)` rows;
-  evaluator V(s) = LightGBM win predictor (AUC 0.64, calibrated mid-range; upgrades:
-  revealed-set belief features, more replays). Rows are per-decision-point, both players.
-- **M2 (partial)**: policy clone pi(a|s) — flat multiclass stalls at ~35% top-1.
-  Redesign as 2-stage (move-vs-switch classifier, then action ranker) before
-  trusting it in search. Files: scripts/train_pi.py, data/pi_model.txt.
-- **M3 (v0 done)**: kingambit plays! `scripts/selfplay.py` runs VsAgent (one-ply
-  expectimax, V(s) leaves, pessimistic opponent = max-damage response) vs
-  SimpleHeuristicsPlayer (poryclone) on the local server. First full game:
-  35 turns, coherent setup/pivot patterns, LOSS. Decisions: data/selfplay.log.
-  Next: pi-weighted opponent model, depth-2, tera, protect scouting.
-- **M4 (stretch)**: self-play fine-tuning.
+- **V(s)** — LightGBM win predictor; current build = `models/v2_model.txt` with the v2 featurizer (393 dims), AUC 0.72 on ~202k rows (`models/v2_metrics.json`; ~2.3k are our own games). Doubles has its own `v_model_doubles.txt`.
+- **π** — `pi2` (move-vs-switch, then action ranker) weights the opponent's response; `pi2doubles` for doubles. The flat multiclass clone (`train_pi.py`, ~35% top-1) is superseded.
+- **Player** — `VsAgent` / `VsAgentDoubles`: one-ply expectimax with V(s) leaves; every tuning constant lives in `sb/heuristics.py` (nowhere else). Physics lives in `sb/transitions.py`, nothing learned.
+- **Live** — `scripts/serve.py` is the lobby bot (singles + doubles; systemd user service, toggled from the waybar services panel). `scripts/gauntlet.py` plays past selves and `sb.learn` dumps our own games back into the corpus for retraining.
+- **Ideas not yet done** (from earlier notes): depth-2 search, tera / protect scouting, self-play fine-tuning.
 
 ## Bot plumbing (hard-won, do not rediscover)
 
@@ -62,6 +55,7 @@ uv run python -m sb.parser_doubles # -> data/rows_v2_doubles.jsonl
 uv run python scripts/train_v_v2.py     # -> models/v2_model.txt
 uv run python scripts/train_pi2.py      # -> data/pi2_*
 uv run python scripts/gauntlet.py      # self-gauntlet + online learning
+uv run python scripts/ladder.py        # ladder runs with per-game dumps
 uv run python scripts/serve.py         # THE lobby bot (singles + doubles)
 ```
 
@@ -72,8 +66,7 @@ See ARCHITECTURE.md for the system layout and contribution rules.
 - LightGBM spawns a thread per core by default — training scripts cap
   `num_threads: 4` and should be launched `nice -n 15`. Load average hit 98
   uncapped. Don't remove the cap.
-- `pkill -f <pattern>` from a shell whose command line contains the pattern
-  kills the shell itself — use `[b]racket` patterns, and put kills and starts
-  in separate tool calls.
+- Never `pkill -f <pattern>` when your own command line contains the pattern — it
+  kills the shell. Kill by pid (or use `[b]racket` patterns in a separate call).
 - Replay archive may rate-limit (`search.json` timeouts) after big harvests;
   back off and resume — harvest.py checkpoints via manifest.
