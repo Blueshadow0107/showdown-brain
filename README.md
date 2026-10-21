@@ -15,7 +15,7 @@ Every turn, for every legal action it can take:
 EV(action) = V(state after my action + opponent's most likely response)
 ```
 
-- **V(s)** — LightGBM win predictor (AUC 0.716) over a perspective-symmetric
+- **V(s)** — LightGBM win predictor (AUC 0.72) over a perspective-symmetric
   feature vector: species, stats, HP, boosts, status, item/ability semantic
   tags, hazards, weather, terrain, tera — plus a **momentum block** (speed
   control, both-side kill-clocks, priority presence, switch counters).
@@ -59,7 +59,7 @@ patched server (`pokemon-showdown` fork with offline account registration), but
 any server the bot can log into works.
 
 ```bash
-git clone <this repo> && cd showdown-brain
+git clone https://github.com/Blueshadow0107/showdown-brain && cd showdown-brain
 uv sync
 
 # 1. start a showdown server (see https://github.com/smogon/pokemon-showdown)
@@ -121,14 +121,13 @@ uv run python scripts/selfplay.py    # bot vs poke-env SimpleHeuristicsPlayer
 - `models/` — pretrained V / π (git-tracked, ~2 MB total)
 - `data/` — harvested replays + rows (gitignored, can be GBs)
 
-Game data in `assets/` comes from the community-maintained
-[pokemon-data](https://github.com/cyanidepopcorn/pokemon-data) pipeline
-(Smogon sets + TypeSafe semantic tags). Override the location with
-`POKEMON_DATA=/path/to/dir`.
+Game data is vendored in `assets/` (Smogon randbats sets + TypeSafe semantic
+tags), so nothing extra needs downloading. To use a different copy, override the
+location with `POKEMON_DATA=/path/to/dir`.
 
 ## Status & known weaknesses
 
-- V(s) AUC ~0.64 — mid-game EVs live in a narrow band, so decisions cluster.
+- V(s) AUC ~0.72 — mid-game EVs live in a narrow band, so decisions cluster.
   More (and higher-rated) replays is the main lever.
 - One-ply search: no move-sequencing awareness (setup → attack patterns are
   emergent from V, not planned).
