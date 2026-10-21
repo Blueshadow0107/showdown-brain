@@ -123,7 +123,8 @@ uv run python scripts/selfplay.py    # bot vs poke-env SimpleHeuristicsPlayer
 
 Game data is vendored in `assets/` (Smogon randbats sets + TypeSafe semantic
 tags), so nothing extra needs downloading. To use a different copy, override the
-location with `POKEMON_DATA=/path/to/dir`.
+location with `POKEMON_DATA=/path/to/dir`. The scripts that built it are in
+`scripts/data-pipeline/`.
 
 ## Status & known weaknesses
 
