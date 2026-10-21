@@ -1,60 +1,78 @@
-"""human_any.py — kingambit accepts BOTH singles and doubles challenges.
+"""serve.py — kingambit accepts singles, doubles and free-for-all battles.
 
 One account, one process: dispatches each battle to the right brain by
 battle type. Random-battle formats generate teams server-side, so a single
-listener can serve both formats.
+listener can serve every format. FFA has no challenge flow: the bot queues
+into gen9freeforallrandombattle as the group's standing 4th player. The
+standing switch is server-dependent: on the LOCAL sim it is data/ffa-standing
+(or SHOWDOWN_FFA_STANDING=1) — delete the file to stand down. On MAIN the
+file is ignored (it would hog both battle slots and starve challenge
+accepts); queue there only via SHOWDOWN_FFA_STANDING=1 or the "ffa on" PM,
+and stand down with "ffa off".
+
+Server selection: SHOWDOWN_SERVER=local (default) plays on the private sim;
+SHOWDOWN_SERVER=main plays on play.pokemonshowdown.com with the ladder
+account (stock poke-env login — no local patch) and turns battle timers on.
 """
 import asyncio
 import json
+import os
 import pathlib
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-import requests  # noqa: E402
 from poke_env import AccountConfiguration, ServerConfiguration  # noqa: E402
+from poke_env import ShowdownServerConfiguration  # noqa: E402
 from poke_env.battle import DoubleBattle  # noqa: E402
+from poke_env.concurrency import handle_threaded_coroutines  # noqa: E402
+from poke_env.data import to_id_str  # noqa: E402
 from poke_env.player import Player  # noqa: E402
-import poke_env.ps_client.ps_client as psc  # noqa: E402
 
+import sb.ffa_poke_env  # noqa: E402
+import sb.local_ps_login  # noqa: E402
 from sb.agent import VsAgent  # noqa: E402
 from sb.agent_doubles import VsAgentDoubles  # noqa: E402
+from sb.agent_ffa import VsAgentFFA  # noqa: E402
+from sb.ffa_poke_env import FFABattle  # noqa: E402
 from sb.learn import dump_battle, learn_new_games  # noqa: E402
 
-LOCAL = ServerConfiguration(
+MAIN = os.environ.get("SHOWDOWN_SERVER", "local").lower() == "main"
+LOCAL = ShowdownServerConfiguration if MAIN else ServerConfiguration(
     "ws://localhost:8000/showdown/websocket",
     "http://localhost:8000/~~localhost/action.php?",
 )
 
-
-async def local_login(self, split_message):
-    if self.account_configuration.password:
-        r = requests.get(
-            self.server_configuration.authentication_url,
-            params={
-                "act": "login",
-                "name": self.account_configuration.username,
-                "pass": self.account_configuration.password,
-                "challstr": split_message[2] + "%7C" + split_message[3],
-            },
-            timeout=10.0,
-        )
-        assertion = json.loads(r.text[1:])["assertion"]
-    else:
-        assertion = ""
-    await self.send_message(f"/trn {self.username},0,{assertion}")
-    await self.change_avatar(self._avatar)
+FFA_FORMAT = "gen9freeforallrandombattle"
+ADOPTABLE_FORMATS = {"gen9randombattle", "gen9randomdoublesbattle", FFA_FORMAT}
+FFA_STANDING_FILE = ROOT / "data" / "ffa-standing"
 
 
-psc.PSClient.log_in = local_login
+def ffa_standing_env() -> bool:
+    return os.environ.get("SHOWDOWN_FFA_STANDING", "").lower() in \
+        {"1", "true", "yes", "on"}
+
+
+def ffa_standing_requested() -> bool:
+    # The standing file is the LOCAL group's "standing 4th" switch; on main
+    # its mere existence must not queue public FFA. There the queue is
+    # env/PM-only, so the PM toggle is never stomped by the file watcher.
+    return ffa_standing_env() if MAIN else \
+        ffa_standing_env() or FFA_STANDING_FILE.exists()
 
 
 class UniversalAgent(Player):
-    """Routes each battle to a singles or doubles brain. The delegates are
-    never started as players — only their decision methods are used."""
+    """Routes each battle to a singles, doubles or FFA brain. The delegates
+    are never started as players — only their decision methods are used."""
 
     def __init__(self, *args, log_path=None, **kwargs):
+        # Message handling can start before the delegates below exist — a
+        # battle message raced __init__ once ('_ffa' AttributeError). Default
+        # to None and guard the decision methods until they are built.
+        self._singles = None
+        self._doubles = None
+        self._ffa = None
         super().__init__(*args, **kwargs)
         # delegates share our connection for orders; their own clients are
         # inert (never started). Distinct throwaway accounts avoid clashes.
@@ -70,50 +88,196 @@ class UniversalAgent(Player):
             battle_format="gen9randomdoublesbattle",
             log_path=str(ROOT / "data" / "human-games-doubles.log"),
         )
+        ffa_model = "v_ffa.txt" if (ROOT / "models" / "v_ffa.txt").exists() \
+            else "v2_model.txt"
+        self._ffa = VsAgentFFA(
+            account_configuration=AccountConfiguration("unused_f", "unused"),
+            server_configuration=LOCAL,
+            battle_format=FFA_FORMAT,
+            log_path=str(ROOT / "data" / "human-games-ffa.log"),
+            brain={"model": ffa_model, "featurizer": "v2", "pi2": True},
+        )
+        self._ffa_enabled = ffa_standing_requested()
+        self._ffa_search_issued = False
+        self._hook_private_messages()
+
+    def _hook_private_messages(self):
+        """poke-env 0.16 only logs PM text — there is no listener hook, so
+        wrap the client's message handler: act on exact PM commands first,
+        then defer to the original handler (challenge routing, logging)."""
+        agent = self
+        original = self.ps_client._handle_message
+
+        async def _handle_with_pm(message: str):
+            try:
+                for line in message.split("\n"):
+                    parts = line.split("|")
+                    if len(parts) >= 5 and parts[1] == "pm":
+                        await agent._on_pm(parts[2].strip(), parts[4])
+            except Exception as e:
+                agent.logger.warning("pm hook failed: %r", e)
+            try:
+                await original(message)
+            except Exception as e:
+                # Challenges arrive as PMs — a parse crash must not take the
+                # message that carries them.
+                agent.logger.warning("pm handler failed: %r", e)
+
+        self.ps_client._handle_message = _handle_with_pm
+
+    async def _on_pm(self, sender: str, text: str):
+        if to_id_str(sender) == to_id_str(self.username):
+            return
+        if text == "ffa on":
+            self._ffa_enabled = True
+            self._ffa_search_issued = False
+            await self.ps_client.send_message(
+                f"/pm {sender}, ffa queue on — searching {FFA_FORMAT}")
+        elif text == "ffa off":
+            self._ffa_enabled = False
+            self._ffa_search_issued = False
+            # poke-env 0.16 has no search-cancellation API; /cancelsearch is
+            # the server's own command and cancels every queued search.
+            await self.ps_client.send_message("/cancelsearch")
+            await self.ps_client.send_message(f"/pm {sender}, ffa queue off")
 
     async def _handle_challenge_request(self, split_message):
         """poke-env drops incoming challenges whose format != self._format
         (player.py:428) and _create_battle repeats the check at battle init
         (player.py:192). A universal listener adopts the challenge's format
-        so both gates pass for singles AND doubles."""
+        so both gates pass — but only for formats it actually plays."""
         challenger = split_message[2].strip()
         if challenger != self.username:
-            if len(split_message) >= 6:
+            if len(split_message) >= 6 and split_message[5] in ADOPTABLE_FORMATS:
                 self._format = split_message[5]
-            await self._challenge_queue.put(challenger)
+                await self._challenge_queue.put(challenger)
+            else:
+                fmt = split_message[5] if len(split_message) >= 6 else "?"
+                self.logger.info(
+                    "ignoring challenge from %s (%s)", challenger, fmt)
+
+    def refresh_ffa_standing(self):
+        """The standing flag is a file/env check so it toggles without a
+        restart; the watcher re-reads it on every poll."""
+        if ffa_standing_requested():
+            self._ffa_enabled = True
+
+    async def maybe_search_ffa(self):
+        """Re-issue the FFA ladder search whenever enabled and idle, so the
+        bot stays queued as the group's standing 4th player."""
+        if not self._ffa_enabled or self._ffa_search_issued:
+            return
+        if any(isinstance(b, FFABattle) and not b.finished
+               for b in self.battles.values()):
+            return
+        if not self._challenge_queue.empty():
+            # A challenge is waiting on a battle slot; flipping _format to
+            # FFA now would make poke-env drop the challenge's battle at
+            # init (player._create_battle gates on self.format).
+            return
+
+        async def _search():
+            await self.ps_client.wait_for_login()
+            self._format = FFA_FORMAT
+            # Set BEFORE issuing: otherwise every 5s poll re-sends /search
+            # ("already searching" spam -> sim rate-limit -> late games).
+            self._ffa_search_issued = True
+            try:
+                await self.ps_client.search_ladder_game(FFA_FORMAT, None)
+            except Exception:
+                self._ffa_search_issued = False
+                raise
+
+        await handle_threaded_coroutines(_search(), self.ps_client.loop)
 
     def choose_move(self, battle):
+        if self._ffa is None:  # delegates not built yet — see __init__
+            return self.choose_default_move()
+        if isinstance(battle, FFABattle):
+            return self._ffa.choose_move(battle)
         if isinstance(battle, DoubleBattle):
             return self._doubles.choose_move(battle)
         return self._singles.choose_move(battle)
 
+    def teampreview(self, battle):
+        if self._ffa is None:
+            return super().teampreview(battle)
+        if isinstance(battle, FFABattle):
+            return self._ffa.teampreview(battle)
+        return super().teampreview(battle)
+
+
+async def accept_loop(king: UniversalAgent):
+    while True:
+        try:
+            await king.accept_challenges(None, 1)
+        except Exception as e:
+            print(f"  accept failed (non-fatal): {e!r}", flush=True)
+            await asyncio.sleep(3)
+
+
+async def ffa_watch(king: UniversalAgent):
+    while True:
+        try:
+            king.refresh_ffa_standing()
+            await king.maybe_search_ffa()
+        except Exception as e:
+            print(f"  ffa search failed (non-fatal): {e!r}", flush=True)
+        await asyncio.sleep(5)
+
 
 async def main():
-    import os
-    prefix = "SHOWDOWN_BOT_"
-    user, pw = os.environ.get(prefix + "USER"), os.environ.get(prefix + "PASS")
-    if user and pw:
+    sb.ffa_poke_env.install()
+    if not MAIN:
+        sb.local_ps_login.install()
+
+    if MAIN:
+        a = json.load(open(ROOT / "data" / "ladder-account.json"))
+        user = os.environ.get("SHOWDOWN_LADDER_USER") or a["username"]
+        pw = os.environ.get("SHOWDOWN_LADDER_PASS") or a["password"]
         account = AccountConfiguration(user, pw)
     else:
-        a = json.load(open(ROOT / "data" / "bot-account.json"))
-        account = AccountConfiguration(a["username"], a["password"])
+        prefix = "SHOWDOWN_BOT_"
+        user = os.environ.get(prefix + "USER")
+        pw = os.environ.get(prefix + "PASS")
+        if user and pw:
+            account = AccountConfiguration(user, pw)
+        else:
+            a = json.load(open(ROOT / "data" / "bot-account.json"))
+            account = AccountConfiguration(a["username"], a["password"])
     king = UniversalAgent(
         account_configuration=account,
         server_configuration=LOCAL,
         battle_format="gen9randombattle",
+        max_concurrent_battles=2,
     )
     await king.ps_client.send_message("/join lobby")
-    print("kingambit is online (lobby) — accepting singles AND doubles, forever", flush=True)
-    seen = set()
+    where = "PS MAIN" if MAIN else "lobby"
+    standing = "on (standing 4th — rm data/ffa-standing to stand down)" \
+        if king._ffa_enabled else "off (PM 'ffa on' to queue)"
+    print(f"{king.username} is online ({where}) — accepting singles, doubles "
+          f"and FFA; ffa queue {standing}", flush=True)
+    asyncio.create_task(accept_loop(king))
+    asyncio.create_task(ffa_watch(king))
+    seen, started = set(), set()
     while True:
-        await king.accept_challenges(None, 1)
         for tag, b in king.battles.items():
-            if tag in seen:
+            if tag not in started:
+                started.add(tag)
+                if MAIN:  # main randbats has no auto-timer
+                    await king.ps_client.send_message("/timer on", room=tag)
+            if tag in seen or not b.finished:
                 continue
             seen.add(tag)
             dump_battle(b)  # every game becomes training data
             result = "WIN" if b.won else "LOSS" if b.lost else "TIE"
-            kind = "doubles" if isinstance(b, DoubleBattle) else "singles"
+            if isinstance(b, FFABattle):
+                kind = "ffa"
+                king._ffa_search_issued = False  # re-queue as the 4th
+            elif isinstance(b, DoubleBattle):
+                kind = "doubles"
+            else:
+                kind = "singles"
             print(f"{tag} [{kind}]: {result} (turns: {b.turn})", flush=True)
         # fold finished games into the personal corpus + rebuild the model
         try:
