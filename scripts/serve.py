@@ -47,6 +47,9 @@ LOCAL = ShowdownServerConfiguration if MAIN else ServerConfiguration(
 FFA_FORMAT = "gen9freeforallrandombattle"
 ADOPTABLE_FORMATS = {"gen9randombattle", "gen9randomdoublesbattle", FFA_FORMAT}
 FFA_STANDING_FILE = ROOT / "data" / "ffa-standing"
+# Only these accounts get their friend requests auto-accepted (userids).
+FRIEND_ALLOW = {to_id_str(u) for u in
+                os.environ.get("SHOWDOWN_FRIENDS", "cyanidepopcorn").split(",") if u.strip()}
 
 
 def ffa_standing_env() -> bool:
@@ -128,7 +131,14 @@ class UniversalAgent(Player):
     async def _on_pm(self, sender: str, text: str):
         if to_id_str(sender) == to_id_str(self.username):
             return
-        if text == "ffa on":
+        if "sent you a friend request!" in text:
+            if to_id_str(sender) in FRIEND_ALLOW:
+                await self.ps_client.send_message(
+                    f"/friends accept {to_id_str(sender)}")
+                self.logger.info("accepted friend request from %s", sender)
+            else:
+                self.logger.info("ignoring friend request from %s", sender)
+        elif text == "ffa on":
             self._ffa_enabled = True
             self._ffa_search_issued = False
             await self.ps_client.send_message(
@@ -257,6 +267,10 @@ async def main():
         if king._ffa_enabled else "off (PM 'ffa on' to queue)"
     print(f"{king.username} is online ({where}) — accepting singles, doubles "
           f"and FFA; ffa queue {standing}", flush=True)
+    # A request sent while the bot was offline never arrives as a PM but is
+    # still pending server-side; accepting a non-pending id is a harmless no-op.
+    for friend in sorted(FRIEND_ALLOW):
+        await king.ps_client.send_message(f"/friends accept {friend}")
     asyncio.create_task(accept_loop(king))
     asyncio.create_task(ffa_watch(king))
     seen, started = set(), set()
