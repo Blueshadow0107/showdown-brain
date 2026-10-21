@@ -14,11 +14,13 @@ import pathlib
 from sb import features, features_doubles, features_v2
 from sb.parser import parse_log
 from sb.parser_doubles import parse_log as parse_log_doubles
+from sb.parser_ffa import parse_log as parse_log_ffa
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 GAMES = ROOT / "data" / "learned_games"
 PERSONAL = ROOT / "data" / "rows_personal.jsonl"
 PERSONAL_D = ROOT / "data" / "rows_personal_doubles.jsonl"
+PERSONAL_FFA = ROOT / "data" / "rows_personal_ffa.jsonl"
 DOUBLES_BASE = ROOT / "data" / "rows_v2_doubles.jsonl"
 SEEN = ROOT / "data" / "learned_games" / "seen.json"
 
@@ -48,18 +50,21 @@ def learn_new_games(retrain: bool = True, games_dir: pathlib.Path | None = None)
 
     Retraining rebuilds from scratch (deterministic, ~40s per model) —
     incremental LightGBM updates drift; a rebuild keeps the morning honest.
-    Doubles logs (by room tag) route to the doubles parser/corpus, so each
-    format only ever trains on its own rows.
+    Logs route to a parser/corpus by room tag (freeforall / doubles / singles),
+    so each format only ever trains on its own rows.
     Returns the number of new games folded in."""
     games_dir = games_dir or GAMES
     seen = _seen()
-    new_rows, new_rows_d, new_games = [], [], []
+    new_rows, new_rows_d, new_rows_f, new_games = [], [], [], []
     for path in sorted(games_dir.glob("*.log")):
         tag = path.stem
         if tag in seen:
             continue
         text = path.read_text(errors="replace")
-        if "doubles" in tag:
+        if "freeforall" in tag:
+            rows = parse_log_ffa(text, tag)
+            target = new_rows_f
+        elif "doubles" in tag:
             rows = parse_log_doubles(text, tag)
             target = new_rows_d
         else:
@@ -80,6 +85,10 @@ def learn_new_games(retrain: bool = True, games_dir: pathlib.Path | None = None)
         with PERSONAL_D.open("a") as f:
             for r in new_rows_d:
                 f.write(json.dumps(r) + "\n")
+    if new_rows_f:
+        with PERSONAL_FFA.open("a") as f:
+            for r in new_rows_f:
+                f.write(json.dumps(r) + "\n")
     seen.update(new_games)
     json.dump(sorted(seen), open(SEEN, "w"))
     if retrain:
@@ -87,6 +96,8 @@ def learn_new_games(retrain: bool = True, games_dir: pathlib.Path | None = None)
             retrain_v2()
         if new_rows_d:
             retrain_v_doubles()
+        if new_rows_f:
+            retrain_v_ffa()
     return len(new_games)
 
 
@@ -161,4 +172,44 @@ def retrain_v_doubles() -> dict:
     model.save_model(str(tmp))
     tmp.replace(ROOT / "models" / "v_model_doubles.txt")
     json.dump(metrics, open(ROOT / "models" / "v_metrics_doubles.json", "w"), indent=1)
+    return metrics
+
+
+def retrain_v_ffa() -> dict:
+    """Rebuild the FFA V on the public FFA corpus + personal FFA rows; eval
+    split stays public-only (mirrors retrain_v2)."""
+    import lightgbm as lgb
+    import numpy as np
+    from sklearn.metrics import auc, roc_curve
+
+    base = [json.loads(l) for l in open(ROOT / "data" / "rows_ffa.jsonl")]
+    pers = [json.loads(l) for l in open(PERSONAL_FFA)] if PERSONAL_FFA.exists() else []
+    rows = base + pers
+    X, y, g = features_v2.build_matrix_v2(rows)
+
+    base_games = np.unique([r["game"] for r in base])
+    rng = np.random.default_rng(7)
+    if len(base_games) > 1:
+        val_games = set(rng.choice(base_games,
+                                   size=max(1, int(0.2 * len(base_games))),
+                                   replace=False))
+        val_mask = np.array([gid in val_games for gid in g])
+        dtrain = lgb.Dataset(X[~val_mask], y[~val_mask])
+    else:  # too few public games for a holdout — evaluate in-sample
+        val_mask = np.ones(len(rows), dtype=bool)
+        dtrain = lgb.Dataset(X, y)
+    dval = lgb.Dataset(X[val_mask], y[val_mask], reference=dtrain)
+    params = {"objective": "binary", "metric": ["binary_logloss", "auc"],
+              "learning_rate": 0.05, "num_leaves": 127, "min_data_in_leaf": 50,
+              "feature_fraction": 0.8, "num_threads": 4, "verbose": -1}
+    model = lgb.train(params, dtrain, num_boost_round=2000, valid_sets=[dval],
+                      callbacks=[lgb.early_stopping(100), lgb.log_evaluation(0)])
+    p = model.predict(X[val_mask])
+    fpr, tpr, _ = roc_curve(y[val_mask], p)
+    metrics = {"rows": int(len(rows)), "personal_rows": len(pers),
+               "auc": round(auc(fpr, tpr), 4), "best_iter": model.best_iteration}
+    tmp = ROOT / "models" / "v_ffa.txt.tmp"
+    model.save_model(str(tmp))
+    tmp.replace(ROOT / "models" / "v_ffa.txt")
+    json.dump(metrics, open(ROOT / "models" / "v_ffa_metrics.json", "w"), indent=1)
     return metrics

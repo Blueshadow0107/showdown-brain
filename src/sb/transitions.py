@@ -15,15 +15,32 @@ MOVES = None
 MATRIX = None
 SPECIES = None
 SETS = None
+SETS_BY_KIND: dict = {}
 
 
 def load():
-    global MOVES, MATRIX, SPECIES, SETS
+    global MOVES, MATRIX, SPECIES, SETS, SETS_BY_KIND
     gd = json.load(open(DATA / "game_data.json"))
     MOVES = gd["moves"]
     MATRIX = gd["matrix"]
     SPECIES = gd["species"]
-    SETS = json.load(open(DATA / "randbats-sets.json"))
+    SETS_BY_KIND = {
+        "singles": json.load(open(DATA / "randbats-sets.json")),
+        "ffa": json.load(open(DATA / "randbats-sets-ffa.json")),
+    }
+    SETS = SETS_BY_KIND["singles"]
+
+
+def set_kind(kind: str):
+    """Switch the active randbats sets table ('singles' default, 'ffa' for
+    free-for-all random). Cheap enough to re-affirm at every decision, so
+    agents call it at the top of each choose_move and a mixed-format process
+    can't leak the wrong table into a decision."""
+    global SETS
+    _ensure()
+    if kind not in SETS_BY_KIND:
+        raise ValueError(f"unknown sets kind: {kind}")
+    SETS = SETS_BY_KIND[kind]
 
 
 def _ensure():

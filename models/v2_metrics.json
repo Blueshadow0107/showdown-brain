@@ -1,6 +1,6 @@
 {
- "rows": 201936,
- "personal_rows": 1981,
- "auc": 0.7239,
- "best_iter": 83
+ "rows": 202264,
+ "personal_rows": 2309,
+ "auc": 0.7246,
+ "best_iter": 86
 }
